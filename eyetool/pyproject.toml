@@ -1,0 +1,29 @@
+[project]
+name = "eyetool"
+version = "0.1.0"
+description = "MCP tools server with auto-discovery and config support"
+readme = "README.md"
+requires-python = ">=3.12"
+
+dependencies = [
+    "fastapi",
+    "uvicorn",
+    "pyyaml",
+    "mcp[cli]",
+    "pytest>=8.4.2",
+    "httpx>=0.28.1",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "httpx",
+    "black",
+]
+
+[build-system]
+requires = ["setuptools", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = []

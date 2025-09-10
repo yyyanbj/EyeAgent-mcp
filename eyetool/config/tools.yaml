@@ -1,0 +1,7 @@
+tools:
+  - module: "tools.math_utils"
+    include: ["calculate", "sum_numbers"]  # Only expose these
+  - module: "tools.weather_utils"
+    include: "all"   # Expose all functions
+  - module: "tools.image_utils"
+    exclude: ["debug_function"]  # Expose all except these
