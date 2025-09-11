@@ -1,3 +1,8 @@
+def generate_image(prompt: str, model_path: str = "default_generation_model.pth") -> str:
+    """Generate an image from a text prompt using a specific model."""
+    # Dummy generated image
+    return "base64_encoded_generated_image"
+
 def calculate(expression: str) -> str:
     """Evaluate a math expression."""
     try:

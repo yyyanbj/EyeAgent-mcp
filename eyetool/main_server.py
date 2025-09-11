@@ -23,13 +23,11 @@ registered_tools = {}  # tool_name: tool_info
 def register_tools_from_config(mcp: FastMCP, config: dict):
     for tool_cfg in config.get("tools", []):
         module_name = tool_cfg["module"]
+        type_name = tool_cfg.get("type", "general")  # Default to "general" if not specified
         include = tool_cfg.get("include", "all")
         exclude = set(tool_cfg.get("exclude", []))
 
         mod = importlib.import_module(module_name)
-
-        # Extract tool type from module name, e.g., "tools.math_utils" -> "math"
-        type_name = module_name.split('.')[1].split('_')[0] if '.' in module_name and '_' in module_name.split('.')[1] else module_name
 
         for name, func in inspect.getmembers(mod, inspect.isfunction):
             if include != "all" and name not in include:
@@ -41,7 +39,7 @@ def register_tools_from_config(mcp: FastMCP, config: dict):
             mcp.tool()(func)
             tool_states[name] = True  # enabled by default
             
-            # Get input schema from function signature
+            # Get input schema from function signature with type constraints
             sig = inspect.signature(func)
             properties = {}
             required = []
@@ -49,10 +47,16 @@ def register_tools_from_config(mcp: FastMCP, config: dict):
                 if param_name == 'self':
                     continue
                 param_type = "string"
-                if param.annotation in (int, float):
+                if param.annotation == int:
+                    param_type = "integer"
+                elif param.annotation == float:
                     param_type = "number"
                 elif param.annotation == bool:
                     param_type = "boolean"
+                elif param.annotation == list:
+                    param_type = "array"
+                elif param.annotation == dict:
+                    param_type = "object"
                 properties[param_name] = {"type": param_type}
                 if param.default == inspect.Parameter.empty:
                     required.append(param_name)
@@ -62,12 +66,26 @@ def register_tools_from_config(mcp: FastMCP, config: dict):
                 "required": required
             }
             
+            # Determine output type based on return annotation
+            output_type = "string"
+            if sig.return_annotation == int:
+                output_type = "integer"
+            elif sig.return_annotation == float:
+                output_type = "number"
+            elif sig.return_annotation == bool:
+                output_type = "boolean"
+            elif sig.return_annotation == list:
+                output_type = "array"
+            elif sig.return_annotation == dict:
+                output_type = "object"
+            
             registered_tools[name] = {
                 "description": func.__doc__ or "",
                 "input_schema": input_schema,
+                "output_type": output_type,
                 "type": type_name
             }
-            logging.info(f"Registered tool: {module_name}.{name}")
+            logging.info(f"Registered tool: {module_name}.{name} with type: {type_name}")
 
 # --- Main App ---
 app = FastAPI()
@@ -84,6 +102,7 @@ def list_tools():
             "name": tool_name,
             "description": tool_info["description"],
             "inputs": tool_info["input_schema"],
+            "outputs": {"type": tool_info["output_type"]},
             "enabled": state,
             "type": tool_info["type"]
         })
@@ -126,7 +145,7 @@ async def tool_ui(request: Request):
         <h2>Tool Management</h2>
         <table id="tools-table">
             <thead>
-                <tr><th>Name</th><th>Type</th><th>Description</th><th>State</th><th>Action</th></tr>
+                <tr><th>Name</th><th>Type</th><th>Description</th><th>Inputs</th><th>Outputs</th><th>State</th><th>Action</th></tr>
             </thead>
             <tbody></tbody>
         </table>
@@ -142,6 +161,8 @@ async def tool_ui(request: Request):
                     <td>${tool.name}</td>
                     <td>${tool.type || ''}</td>
                     <td>${tool.description || ''}</td>
+                    <td>${JSON.stringify(tool.inputs)}</td>
+                    <td>${JSON.stringify(tool.outputs)}</td>
                     <td class="${tool.enabled ? 'enabled' : 'disabled'}">${tool.enabled ? 'Enabled' : 'Disabled'}</td>
                     <td>
                         <button onclick="toggleTool('${tool.name}', ${tool.enabled})">${tool.enabled ? 'Disable' : 'Enable'}</button>

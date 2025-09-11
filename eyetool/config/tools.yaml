@@ -1,7 +1,19 @@
 tools:
-  - module: "tools.math_utils"
-    include: ["calculate", "sum_numbers"]  # Only expose these
-  - module: "tools.weather_utils"
-    include: "all"   # Expose all functions
-  - module: "tools.image_utils"
-    exclude: ["debug_function"]  # Expose all except these
+  - module: "tools.generation"
+    type: "generation"  # Math operations as generation
+    include: ["calculate", "sum_numbers", "multiply"]
+  - module: "tools.multimodal"
+    type: "multimodal"  # Weather might involve multimodal data
+    include: "all"
+  - module: "tools.classification"
+    type: "classification"
+    include: ["classify_image"]
+  - module: "tools.segmentation"
+    type: "segmentation"
+    include: ["segment_image"]
+  - module: "tools.detection"
+    type: "detection"
+    include: ["detect_objects"]
+  - module: "tools.generation"
+    type: "generation"
+    include: ["generate_image"]

@@ -1,0 +1,36 @@
+[project]
+name = "eyeagent"
+version = "0.1.0"
+description = "MCP Agent with various tools"
+readme = "README.md"
+requires-python = ">=3.12"
+
+dependencies = [
+    "fastapi",
+    "uvicorn",
+    "pyyaml",
+    "mcp[cli]",
+    "pytest>=8.4.2",
+    "httpx>=0.28.1",
+    "fastmcp>=2.12.2",
+    "langchain",
+    "langchain-openai",
+    "langgraph",
+    "gradio",
+    "python-dotenv",
+    "loguru",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "httpx",
+    "black",
+]
+
+[build-system]
+requires = ["setuptools", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = []
