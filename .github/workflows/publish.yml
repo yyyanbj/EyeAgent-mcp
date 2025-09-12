@@ -11,15 +11,9 @@ permissions:
   contents: read
 
 jobs:
-  build-and-publish:
-    name: Publish ${{ matrix.package.name }}
+  publish-eyetools:
+    if: startsWith(github.ref_name, 'eyetools-v')
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        package:
-          - { name: 'eyetools', dir: 'eyetools', tag_prefix: 'eyetools-v', secret: 'PYPI_TOKEN_EYEAGENT' }
-          - { name: 'eyeagent', dir: 'eyeagent', tag_prefix: 'eyeagent-v', secret: 'PYPI_TOKEN_EYEAGENT' }
-    if: startsWith(github.ref_name, matrix.package.tag_prefix)
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -34,11 +28,11 @@ jobs:
 
       - name: Derive version from tag & validate pyproject
         id: ver
-        working-directory: ${{ matrix.package.dir }}
+        working-directory: eyetools
         run: |
           TAG='${{ github.ref_name }}'
-          PREFIX='${{ matrix.package.tag_prefix }}'
-            VERSION="${TAG#${PREFIX}}"
+          PREFIX='eyetools-v'
+          VERSION="${TAG#${PREFIX}}"
           echo "Tag: $TAG -> Version: $VERSION"
           FILE_VERSION=$(grep '^version *= *' pyproject.toml | head -n1 | sed -E "s/version *= *\"([^\"]+)\"/\1/")
           echo "pyproject.toml version: $FILE_VERSION"
@@ -49,16 +43,60 @@ jobs:
           echo "version=$VERSION" >> $GITHUB_OUTPUT
 
       - name: Build wheel & sdist
-        working-directory: ${{ matrix.package.dir }}
+        working-directory: eyetools
         run: python -m build --wheel --sdist
 
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
-          password: ${{ secrets[matrix.package.secret] }}
-          packages-dir: ${{ matrix.package.dir }}/dist
+          password: ${{ secrets.PYPI_TOKEN_EYEAGENT }}
+          packages-dir: eyetools/dist
           verbose: true
 
       - name: Summary
+        run: echo "Published eyetools version ${{ steps.ver.outputs.version }}" >> $GITHUB_STEP_SUMMARY
+
+  publish-eyeagent:
+    if: startsWith(github.ref_name, 'eyeagent-v')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install build backend
+        run: pip install --upgrade build
+
+      - name: Derive version from tag & validate pyproject
+        id: ver
+        working-directory: eyeagent
         run: |
-          echo "Published ${{ matrix.package.name }} version ${{ steps.ver.outputs.version }}" >> $GITHUB_STEP_SUMMARY
+          TAG='${{ github.ref_name }}'
+          PREFIX='eyeagent-v'
+          VERSION="${TAG#${PREFIX}}"
+          echo "Tag: $TAG -> Version: $VERSION"
+          FILE_VERSION=$(grep '^version *= *' pyproject.toml | head -n1 | sed -E "s/version *= *\"([^\"]+)\"/\1/")
+          echo "pyproject.toml version: $FILE_VERSION"
+          if [ "$VERSION" != "$FILE_VERSION" ]; then
+            echo "::error::Tag version ($VERSION) does not match pyproject.toml version ($FILE_VERSION)" >&2
+            exit 1
+          fi
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Build wheel & sdist
+        working-directory: eyeagent
+        run: python -m build --wheel --sdist
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          password: ${{ secrets.PYPI_TOKEN_EYEAGENT }}
+          packages-dir: eyeagent/dist
+          verbose: true
+
+      - name: Summary
+        run: echo "Published eyeagent version ${{ steps.ver.outputs.version }}" >> $GITHUB_STEP_SUMMARY
