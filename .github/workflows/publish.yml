@@ -17,7 +17,7 @@ jobs:
     strategy:
       matrix:
         package:
-          - { name: 'eyetools', dir: 'eyetools', tag_prefix: 'eyetools-v', secret: 'PYPI_TOKEN_EYETOOLS' }
+          - { name: 'eyetools', dir: 'eyetools', tag_prefix: 'eyetools-v', secret: 'PYPI_TOKEN_EYEAGENT' }
           - { name: 'eyeagent', dir: 'eyeagent', tag_prefix: 'eyeagent-v', secret: 'PYPI_TOKEN_EYEAGENT' }
     if: startsWith(github.ref_name, matrix.package.tag_prefix)
     steps:
