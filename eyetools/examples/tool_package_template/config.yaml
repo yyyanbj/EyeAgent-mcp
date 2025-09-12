@@ -17,8 +17,9 @@ category: demo
 
 # Shared settings merged into each variant unless overridden.
 shared:
-  # Reference to a managed Python baseline environment (envs/<ref>)
-  # The framework will resolve to: uv run --directory envs/<ref> ...
+  # Reference to a managed Python baseline environment (envs/<ref>).
+  # During execution EnvManager merges the dependencies from envs/<ref>/pyproject.toml
+  # and appends any extra_requires for a deterministic uv invocation.
   environment_ref: py312
 
   # Extra lightweight ad-hoc requirements appended via uv --with

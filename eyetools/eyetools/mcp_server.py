@@ -63,8 +63,10 @@ def _compute_tool_paths(include_examples: bool, extra_paths: List[str]) -> List[
 
 def create_app(include_examples: bool = False, tool_paths: Optional[List[str]] = None, role_config_path: Optional[str] = None):
     registry = ToolRegistry()
+    # Two env vars supported for flexibility: legacy EYETOOLS_TOOL_PATHS and new EYETOOLS_EXTRA_TOOL_PATHS
     extra_paths_env = os.getenv("EYETOOLS_TOOL_PATHS", "")
-    env_paths = [p for p in extra_paths_env.split(":") if p]
+    extra_paths_env2 = os.getenv("EYETOOLS_EXTRA_TOOL_PATHS", "")
+    env_paths = [p for p in (extra_paths_env.split(":") + extra_paths_env2.split(":")) if p]
     combined_paths = (tool_paths or []) + env_paths
     path_objs = _compute_tool_paths(include_examples, combined_paths)
     errors = discover_tools(path_objs, registry)

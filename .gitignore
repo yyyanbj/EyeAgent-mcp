@@ -208,7 +208,7 @@ __marimo__/
 
 uv.lock
 
-misc/
+langchain_tool_src/
 envs/
 weights/
 

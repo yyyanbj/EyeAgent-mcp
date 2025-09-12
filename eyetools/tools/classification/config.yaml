@@ -1,0 +1,49 @@
+package: classification
+entry: tool_impl:ClassificationTool
+category: vision
+shared:
+  environment_ref: py312
+  runtime:
+    load_mode: auto
+    idle_timeout_s: 600
+    device_policy: auto
+    preload: false
+  io:
+    input_schema:
+      image: path
+    output_schema:
+      predictions: list
+  model_defaults:
+    precision: auto
+    lazy: true
+variants:
+  - variant: modality
+    version: 0.1.0
+    params:
+      task: modality
+      threshold: 0.3
+  - variant: cfp_quality
+    version: 0.1.0
+    params:
+      task: cfp_quality
+      threshold: 0.3
+  - variant: laterality
+    version: 0.1.0
+    params:
+      task: laterality
+      threshold: 0.3
+  - variant: multidis
+    version: 0.1.0
+    params:
+      task: multidis
+      threshold: 0.3
+  - variant: cfp_age
+    version: 0.1.0
+    params:
+      task: cfp_age
+      threshold: 0.0
+metadata:
+  authors: ["EyeAgent Team"]
+  license: Apache-2.0
+notes:
+  - 0.1.0 classification package
