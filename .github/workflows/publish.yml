@@ -1,0 +1,64 @@
+name: Publish Python Packages
+
+on:
+  push:
+    tags:
+      - 'eyetools-v*'
+      - 'eyeagent-v*'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-publish:
+    name: Publish ${{ matrix.package.name }}
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        package:
+          - { name: 'eyetools', dir: 'eyetools', tag_prefix: 'eyetools-v', secret: 'PYPI_TOKEN_EYETOOLS' }
+          - { name: 'eyeagent', dir: 'eyeagent', tag_prefix: 'eyeagent-v', secret: 'PYPI_TOKEN_EYEAGENT' }
+    if: startsWith(github.ref_name, matrix.package.tag_prefix)
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install build backend
+        run: pip install --upgrade build
+
+      - name: Derive version from tag & validate pyproject
+        id: ver
+        working-directory: ${{ matrix.package.dir }}
+        run: |
+          TAG='${{ github.ref_name }}'
+          PREFIX='${{ matrix.package.tag_prefix }}'
+            VERSION="${TAG#${PREFIX}}"
+          echo "Tag: $TAG -> Version: $VERSION"
+          FILE_VERSION=$(grep '^version *= *' pyproject.toml | head -n1 | sed -E "s/version *= *\"([^\"]+)\"/\1/")
+          echo "pyproject.toml version: $FILE_VERSION"
+          if [ "$VERSION" != "$FILE_VERSION" ]; then
+            echo "::error::Tag version ($VERSION) does not match pyproject.toml version ($FILE_VERSION)" >&2
+            exit 1
+          fi
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Build wheel & sdist
+        working-directory: ${{ matrix.package.dir }}
+        run: python -m build --wheel --sdist
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          password: ${{ secrets[matrix.package.secret] }}
+          packages-dir: ${{ matrix.package.dir }}/dist
+          verbose: true
+
+      - name: Summary
+        run: |
+          echo "Published ${{ matrix.package.name }} version ${{ steps.ver.outputs.version }}" >> $GITHUB_STEP_SUMMARY

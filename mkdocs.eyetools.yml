@@ -1,0 +1,15 @@
+site_name: EyeTools 文档
+site_description: EyeTools MCP 工具服务器文档
+site_url: https://beiyuouo.github.io/EyeAgent-mcp/eyetools/
+repo_url: https://github.com/beiyuouo/EyeAgent-mcp
+docs_dir: eyetools/docs
+nav:
+  - 首页: index.md
+  - 快速开始: quickstart.md
+  - 架构: architecture.md
+  - 测试与质量: testing.md
+  - 贡献: contributing.md
+theme:
+  name: mkdocs
+extra:
+  generator: false

@@ -1,0 +1,13 @@
+site_name: EyeAgent 文档
+site_description: EyeAgent 多智能体框架文档
+site_url: https://beiyuouo.github.io/EyeAgent-mcp/eyeagent/
+repo_url: https://github.com/beiyuouo/EyeAgent-mcp
+docs_dir: eyeagent/docs
+nav:
+  - 首页: index.md
+  - 快速开始: quickstart.md
+  - 架构: architecture.md
+theme:
+  name: mkdocs
+extra:
+  generator: false

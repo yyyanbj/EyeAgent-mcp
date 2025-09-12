@@ -34,7 +34,7 @@ Each agent now has **specific tools** based on their role:
 - **Gradio UI**: Interactive web interface to communicate with the agents
 - **Comprehensive Logging**: Detailed logs of agent interactions and tool usage
 
-## Setup
+## Setup & CI/CD
 
 1. Install dependencies:
    ```bash
@@ -104,6 +104,21 @@ The Gradio interface will be available at `http://localhost:7860`.
    ```
 
 ## Architecture
+
+## CI/CD
+
+PyPI 发布使用标签策略：
+- `eyeagent-vX.Y.Z`
+- 推送前更新 `pyproject.toml` 中版本。
+
+文档 (GitHub Pages) 构建：
+- 主分支推送自动构建 `mkdocs.eyeagent.yml` & `mkdocs.eyetools.yml`。
+- 访问：https://beiyuouo.github.io/EyeAgent-mcp/eyeagent/  与 `/eyetools/`。
+
+所需仓库 Secrets：
+- `PYPI_TOKEN_EYEAGENT`
+- `PYPI_TOKEN_EYETOOLS`
+
 
 The system uses LangGraph to create an asynchronous state graph with the following nodes:
 - **Coordinator**: Routes tasks to appropriate agents and provides tool context

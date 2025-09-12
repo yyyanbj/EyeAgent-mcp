@@ -1,0 +1,4 @@
+# Additional dependencies for this tool package only
+# Lines here will be appended via `uv run --with requirements.txt`
+# Example:
+# timm==0.9.12

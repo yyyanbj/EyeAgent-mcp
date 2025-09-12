@@ -1,0 +1,40 @@
+[project]
+name = "eyetools"
+version = "0.1.0"
+description = "MCP tools server with auto-discovery and config support"
+readme = "README.md"
+requires-python = ">=3.12"
+
+dependencies = [
+    "fastapi",
+    "uvicorn",
+    "pyyaml",
+    "mcp[cli]",
+    "pytest>=8.4.2",
+    "httpx>=0.28.1",
+    "fastmcp>=2.12.2",
+    "torch>=2.8.0",
+    "torchvision>=0.23.0",
+    "requests>=2.32.5",
+    "opencv-python>=4.12.0.88",
+    "matplotlib>=3.10.6",
+    "fire>=0.6.0",
+    "packaging>=21.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "httpx",
+    "black",
+]
+
+[build-system]
+requires = ["setuptools", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["eyetools"]
+
+[project.scripts]
+eyetools-mcp = "eyetools.cli:main"

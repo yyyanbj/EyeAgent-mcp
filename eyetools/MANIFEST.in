@@ -1,0 +1,10 @@
+include README.md
+include TOOLS_FRAMEWORK_README.md
+include requirements.txt
+include pyproject.toml
+include config/tools.yaml
+recursive-include eyetools *.py
+recursive-include tests *.py
+global-exclude __pycache__
+global-exclude *.pyc
+global-exclude .DS_Store

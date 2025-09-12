@@ -31,7 +31,7 @@ async def main():
     if not mcp_available:
         print("❌ MCP server not available at", MCP_SERVER_URL)
         print("Please start the MCP server first:")
-        print("  cd /home/bingjie/workspace/EyeAgent-mcp/eyetool")
+        print("  cd /home/bingjie/workspace/EyeAgent-mcp/eyetools")
         print("  uv run python main_server.py")
         print("\nOr test the connection with:")
         print("  uv run python test_mcp.py")

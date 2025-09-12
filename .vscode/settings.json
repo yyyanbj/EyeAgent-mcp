@@ -1,0 +1,6 @@
+{
+    "python.analysis.extraPaths": [
+        "/home/bingjie/workspace/EyeAgent-mcp/eyeagent",
+        "/home/bingjie/workspace/EyeAgent-mcp/eyetools"
+    ]
+}

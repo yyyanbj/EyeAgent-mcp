@@ -1,0 +1,99 @@
+#############################################
+# Unified Tool Configuration Template (v2)  #
+# Covers full lifecycle:                    #
+#  discover -> register -> load(model) ->   #
+#  execute(preprocess/inference/postprocess)#
+#  -> unload (idle reclaim)                 #
+#############################################
+
+# Logical package name (import namespace)
+package: demo_template
+
+# Entry point: <module>:<ClassName>
+entry: tool_impl:DemoTemplateTool
+
+# Optional explicit category for discovery / filtering
+category: demo
+
+# Shared settings merged into each variant unless overridden.
+shared:
+  # Reference to a managed Python baseline environment (envs/<ref>)
+  # The framework will resolve to: uv run --directory envs/<ref> ...
+  environment_ref: py312
+
+  # Extra lightweight ad-hoc requirements appended via uv --with
+  extra_requires:
+    - pillow
+
+  # Runtime policies
+  runtime:
+    load_mode: auto            # auto | inproc | subprocess
+    idle_timeout_s: 600        # Seconds before eligible for unloading
+    max_concurrency: 4         # Soft concurrency limit (advisory)
+    device_policy: prefer_cuda # prefer_cuda | cpu_only | force_cuda | auto
+    preload: false             # Pre-load model at registry time
+
+  # Warmup behavior
+  warmup:
+    on_first_call: true        # Run dummy pass at first invocation
+    batch_size: 1
+
+  # IO schemas (simplified). Use JSON schema or shorthand.
+  io:
+    input_schema:
+      input: path|bytes|text
+    output_schema:
+      message: str
+
+  # Lifecycle hooks (all optional module:function strings)
+  lifecycle_hooks:
+    before_load: null
+    after_load: null
+    before_inference: null
+    after_inference: null
+    before_unload: null
+
+  # Default model policy overrides (applied if model subsection omits)
+  model_defaults:
+    precision: auto            # auto | fp32 | fp16 | bf16 | int8
+    lazy: true                 # Defer actual weight load until needed
+    fail_on_missing: true      # Raise if weights glob matches 0 files
+    strict_load: false         # Torch load strict flag
+    verify_num_classes: true   # Cross-check head shape vs classes length
+
+# Variants define concrete tool instances differing by weights/params.
+variants:
+  - variant: small
+    version: 0.1.0
+    model:
+      weights: artifacts/small.pt        # (optional placeholder)
+      precision: auto
+      lazy: true
+    params:
+      msg_prefix: "SMALL"
+      classes: [A, B]                    # Example param: class labels
+  - variant: large
+    version: 0.1.0
+    model:
+      weights: artifacts/large.pt
+      precision: fp16
+      lazy: true
+      size_mb: 400
+    runtime:
+      load_mode: subprocess              # Force isolation for big model
+    params:
+      msg_prefix: "LARGE"
+      classes: [A, B, C]
+
+# Discovery metadata (optional – surfaced to registry/UI/search)
+metadata:
+  tags: [demo, template]
+  license: Apache-2.0
+  authors: ["EyeAgent Team"]
+  homepage: https://example.com/tool
+  description: "Demonstration multi-variant tool template with full lifecycle fields."
+
+# Changelog / versioning hints (free-form)
+notes:
+  - 0.1.0: Initial multi-variant release.
+
