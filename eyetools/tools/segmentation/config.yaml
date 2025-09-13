@@ -1,0 +1,91 @@
+package: segmentation
+entry: tool_impl:SegmentationTool
+category: vision
+shared:
+  environment_ref: py312-seg
+  runtime:
+    load_mode: auto
+    idle_timeout_s: 900
+    device_policy: auto
+    preload: false
+  io:
+    input_schema:
+      image_path: path
+      task: string
+    output_schema:
+      counts: object
+      areas: object
+      output_paths: object
+  model_defaults:
+    precision: auto
+    lazy: true
+variants:
+  - variant: cfp_DR
+    version: 0.1.0
+    params:
+      task: cfp_DR
+  - variant: cfp_artifact
+    version: 0.1.0
+    params:
+      task: cfp_artifact
+  - variant: cfp_atrophy
+    version: 0.1.0
+    params:
+      task: cfp_atrophy
+  - variant: cfp_drusen
+    version: 0.1.0
+    params:
+      task: cfp_drusen
+  - variant: cfp_cnv
+    version: 0.1.0
+    params:
+      task: cfp_cnv
+  - variant: cfp_mh
+    version: 0.1.0
+    params:
+      task: cfp_mh
+  - variant: cfp_rd
+    version: 0.1.0
+    params:
+      task: cfp_rd
+  - variant: cfp_scar
+    version: 0.1.0
+    params:
+      task: cfp_scar
+  - variant: cfp_laserscar
+    version: 0.1.0
+    params:
+      task: cfp_laserscar
+  - variant: cfp_laserspots
+    version: 0.1.0
+    params:
+      task: cfp_laserspots
+  - variant: cfp_membrane
+    version: 0.1.0
+    params:
+      task: cfp_membrane
+  - variant: cfp_edema
+    version: 0.1.0
+    params:
+      task: cfp_edema
+  - variant: oct_layer
+    version: 0.1.0
+    params:
+      task: oct_layer
+  - variant: oct_PMchovefosclera
+    version: 0.1.0
+    params:
+      task: oct_PMchovefosclera
+  - variant: oct_lesion
+    version: 0.1.0
+    params:
+      task: oct_lesion
+  - variant: ffa_lesion
+    version: 0.1.0
+    params:
+      task: ffa_lesion
+metadata:
+  authors: ["EyeAgent Team"]
+  license: Apache-2.0
+notes:
+  - 0.1.0 segmentation package initial
