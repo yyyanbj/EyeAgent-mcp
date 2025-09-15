@@ -1,19 +1,19 @@
-# 快速开始
+# Quick Start
 
-## 安装
-建议使用 uv 进行依赖管理：
+## Install
+We recommend using uv for dependency management:
 ```
 curl -LsSf https://astral.sh/uv/install.sh | sh
 ```
-然后在仓库根目录执行：
+Then in the repository root:
 ```
 uv sync
 ```
 
-## 运行示例
-（示例脚本后续补充）
+## Run Example
+> Example script will be added later.
 
-## 测试
+## Test
 ```
 uv run pytest -q
 ```

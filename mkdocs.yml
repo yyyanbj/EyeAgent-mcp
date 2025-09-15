@@ -1,6 +1,6 @@
 site_name: Eye Platform Docs
-site_description: EyeAgent & EyeTools Unified Documentation
-repo_url: https://github.com/beiyuouo/EyeAgent-mcp
+site_description: EyeAgent & EyeTools unified documentation
+repo_url: https://github.com/yyyanbj/EyeAgent-mcp
 repo_name: EyeAgent-mcp
 docs_dir: _docs_build
 use_directory_urls: true
@@ -16,6 +16,7 @@ nav:
     - Architecture: eyetools/architecture.md
 plugins:
   - search
+  # Future: add 'awesome-pages' or custom nav generation integration.
 markdown_extensions:
   - toc:
       permalink: true
@@ -23,14 +24,34 @@ markdown_extensions:
   - tables
   - fenced_code
 
-# 可选：如果未来使用 material 主题，只需取消注释并安装 mkdocs-material
-# theme:
-#   name: material
-#   language: zh
-#   features:
-#     - navigation.instant
-#     - navigation.tracking
-#     - search.suggest
-#     - search.highlight
+theme:
+  name: material
+  language: en
+  features:
+    - navigation.instant
+    - navigation.tracking
+    - navigation.top
+    - search.suggest
+    - search.highlight
+    - content.code.copy
+    - content.action.edit
+  palette:
+    - scheme: default
+      primary: indigo
+      accent: indigo
+  icon:
+    repo: fontawesome/brands/github
 
-# 先使用内置主题，保持零依赖
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/yyyanbj/EyeAgent-mcp
+  version:
+    provider: mike
+
+extra_css:
+  - css/overrides.css
+
+extra_javascript: []
+
+edit_uri: edit/main/

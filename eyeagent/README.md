@@ -107,15 +107,15 @@ The Gradio interface will be available at `http://localhost:7860`.
 
 ## CI/CD
 
-PyPI 发布使用标签策略：
+PyPI tag naming strategy:
 - `eyeagent-vX.Y.Z`
-- 推送前更新 `pyproject.toml` 中版本。
+- Update version in `pyproject.toml` before pushing the release tag.
 
-文档 (GitHub Pages) 构建：
-- 主分支推送自动构建 `mkdocs.eyeagent.yml` & `mkdocs.eyetools.yml`。
-- 访问：https://beiyuouo.github.io/EyeAgent-mcp/eyeagent/  与 `/eyetools/`。
+Documentation (GitHub Pages) build:
+- Main branch pushes build unified docs (EyeAgent & EyeTools).
+- Visit: https://yyyanbj.github.io/EyeAgent-mcp/eyeagent/ and `/eyetools/`.
 
-所需仓库 Secrets：
+Required repository secrets:
 - `PYPI_TOKEN_EYEAGENT`
 - `PYPI_TOKEN_EYETOOLS`
 

@@ -1,8 +1,8 @@
-# 架构概览
+# Architecture Overview
 
-EyeAgent 负责：
-- 多智能体协调（角色、消息路由）
-- 与工具层（EyeTools）对接，执行感知/分析工具
-- 统一日志与配置管理
+EyeAgent is responsible for:
+- Multi-agent coordination (roles, message routing)
+- Interfacing with the tool layer (EyeTools) to execute perception / analysis tools
+- Unified logging and configuration management
 
-（详细架构说明后续补充）
+> A detailed architecture description will be added in future revisions.

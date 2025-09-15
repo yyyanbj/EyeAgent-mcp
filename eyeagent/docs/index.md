@@ -1,8 +1,8 @@
-# EyeAgent 文档
+# EyeAgent Documentation
 
-欢迎来到 EyeAgent 文档。本项目提供多智能体（Multi-Agent）能力与工具集成，结合 EyeTools 实现工具自动发现与调用。
+Welcome to the EyeAgent documentation. This project provides multi-agent orchestration capabilities and tool integration, working with EyeTools for automatic tool discovery and invocation.
 
-## 目录
-- [快速开始](quickstart.md)
-- [架构](architecture.md)
-- (更多内容将逐步补充)
+## Contents
+- [Quick Start](quickstart.md)
+- [Architecture](architecture.md)
+- (More sections will be added)

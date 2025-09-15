@@ -13,11 +13,11 @@ if [ -d "${ROOT_DOCS}" ]; then
   rsync -a "${ROOT_DOCS}/" "${BUILD_DIR}/"
 fi
 
-# 遍历第一层子目录，聚合其中的 docs 子目录
+# Traverse first-level subdirectories and aggregate their docs folders
 for pkg_docs in "${ROOT_DIR}"/*/docs ; do
   [ -d "${pkg_docs}" ] || continue
   pkg_dir="$(basename "$(dirname "${pkg_docs}")")"
-  # 排除根 docs 目录本身（通常不会匹配，如果用户命名冲突则跳过）
+  # Skip root docs directory itself (name collision safeguard)
   if [ "${pkg_dir}" = "docs" ]; then
     continue
   fi
