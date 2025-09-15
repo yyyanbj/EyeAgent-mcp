@@ -1,7 +1,7 @@
 from __future__ import annotations
 import time
 from dataclasses import dataclass
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Union
 import torch, torch.nn as nn
 from torchvision import transforms
 from PIL import Image
@@ -23,25 +23,62 @@ class ToolVariantMeta:
     task: str
     threshold: float = 0.3
 
+
 class ClassificationTool:
-    def __init__(self, variant: ToolVariantMeta, weights_root: str = "weights/classification", device: Optional[str] = None):
-        self.task = variant.task
-        self.threshold = variant.threshold
+    """Unified constructor signature: (meta_dict, params_dict)
+
+    This aligns with ToolManager expectations so preload works.
+    Backwards-compatible helper load_tool still returns an initialized instance.
+    """
+
+    def __init__(self, meta: Dict[str, Any], params: Dict[str, Any]):
+        # meta/params stored
+        self.meta = meta
+        self.params = params or {}
+        # Resolve task/threshold from params or meta
+        self.task = self.params.get("task") or meta.get("params", {}).get("task")
+        if not self.task:
+            raise ValueError("ClassificationTool requires 'task' in params")
+        self.threshold = float(self.params.get("threshold", meta.get("params", {}).get("threshold", 0.3)))
+        self.weights_root = self.params.get("weights_root", "weights/classification")
+        self.device = torch.device(self.params.get("device") or ("cuda" if torch.cuda.is_available() else "cpu"))
+        self.model = None
+        self.img_size = 224
+        self.transform = None
+        self._model_loaded = False
+
+    # For consistency with ToolBase style
+    def ensure_model_loaded(self):
+        if self._model_loaded:
+            return
+        self._load_model_internal()
+
+    def _load_model_internal(self):
         self.classes = TASK_CLASS_MAP[self.task]
-        self.device = torch.device(device or ("cuda" if torch.cuda.is_available() else "cpu"))
-        self.model, self.img_size = create_model(self.task, self.classes, weights_root)
+        self.model, self.img_size = create_model(self.task, self.classes, self.weights_root)
         self.model.to(self.device).eval()
         self.transform = transforms.Compose([
             transforms.Resize((self.img_size, self.img_size)),
             transforms.ToTensor(),
             transforms.Normalize([0.485,0.456,0.406],[0.229,0.224,0.225]),
         ])
+        self._model_loaded = True
 
     def _load_image(self, path: str):
         img = Image.open(path).convert("RGB")
         return self.transform(img).unsqueeze(0).to(self.device)
 
-    def predict(self, image_path: str) -> Dict[str, Any]:
+    def predict(self, request: Union[str, Dict[str, Any]]) -> Dict[str, Any]:
+        # Backward compatibility: if a string path is passed treat as direct image_path
+        if isinstance(request, str):
+            image_path = request
+        else:
+            # Accept formats: {"inputs":{"image_path":...}} or {"image_path":...}
+            inputs = request.get("inputs") if isinstance(request, dict) else None
+            image_path = (inputs or request).get("image_path") if isinstance(request, dict) else None
+        if not image_path:
+            raise ValueError("image_path missing for classification predict")
+        self.ensure_model_loaded()
         t = self._load_image(image_path)
         start = time.time()
         with torch.no_grad():
@@ -66,8 +103,13 @@ class ClassificationTool:
         return {"task": self.task, "predictions": [p[0] for p in filtered], "probabilities": {k: round(float(v),3) for k,v in filtered}, "inference_time": round(dur,4)}
 
 def load_tool(task: str, threshold: float = 0.3, **kw):
+    """Backward-compatible factory for direct usage in tests / scripts."""
     if task not in TASK_CLASS_MAP:
         raise ValueError(f"Unsupported task {task}")
-    return ClassificationTool(ToolVariantMeta(task=task, threshold=threshold), **kw)
+    meta = {"id": f"classification:{task}", "entry": "tool_impl:ClassificationTool", "version": "0.1.0", "params": {"task": task, "threshold": threshold}}
+    params = {"task": task, "threshold": threshold, **kw}
+    tool = ClassificationTool(meta, params)
+    tool.ensure_model_loaded()
+    return tool
 
 __all__ = ["ClassificationTool", "load_tool"]
