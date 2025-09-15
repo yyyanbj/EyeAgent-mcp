@@ -199,26 +199,44 @@ class SegmentationTool(ToolBase):
         if self.model_id_offset:
             self.model_id = self.model_id + self.model_id_offset
         before_mem = None
+        before_mem_reserved = None
         after_mem = None
+        after_mem_reserved = None
         cuda_avail = torch.cuda.is_available()
         device_name = None
+        first_param_device = None
+        param_count = None
+        cuda_param_bytes = None
         if cuda_avail:
             try:  # pragma: no cover - depends on runtime GPU
                 device_name = torch.cuda.get_device_name(0)
                 before_mem = torch.cuda.memory_allocated(0)
+                before_mem_reserved = torch.cuda.memory_reserved(0)
             except Exception:  # noqa: BLE001
                 pass
         self.predictor = _load_predictor(self.model_id, self.weights_root)
         # Optionally perform a tiny warm tensor allocation to force context materialization
         if cuda_avail and hasattr(self.predictor, 'network'):  # nnUNet predictor has .network
             try:  # pragma: no cover
-                _ = next(self.predictor.network.parameters()).device
+                p = next(self.predictor.network.parameters())
+                first_param_device = str(p.device)
+                # gather stats
+                total = 0
+                cuda_bytes = 0
+                for t in self.predictor.network.parameters():
+                    n = t.numel()
+                    total += n
+                    if t.is_cuda:
+                        cuda_bytes += n * t.element_size()
+                param_count = total
+                cuda_param_bytes = cuda_bytes
             except Exception:  # noqa
                 pass
         if cuda_avail:
             try:  # pragma: no cover
                 torch.cuda.synchronize()
                 after_mem = torch.cuda.memory_allocated(0)
+                after_mem_reserved = torch.cuda.memory_reserved(0)
             except Exception:  # noqa
                 pass
         self._model_loaded = True
@@ -228,13 +246,55 @@ class SegmentationTool(ToolBase):
             "device_name": device_name,
             "mem_before": before_mem,
             "mem_after": after_mem,
+            "mem_before_reserved": before_mem_reserved,
+            "mem_after_reserved": after_mem_reserved,
             "mem_delta": (after_mem - before_mem) if (after_mem is not None and before_mem is not None) else None,
+            "reserved_delta": (after_mem_reserved - before_mem_reserved) if (after_mem_reserved is not None and before_mem_reserved is not None) else None,
+            "first_param_device": first_param_device,
+            "param_count": param_count,
+            "cuda_param_bytes": cuda_param_bytes,
         }
 
     def ensure_model_loaded(self):
         if not self.model_loaded:
             self.load_model()
         return self.model_loaded
+
+    def warmup(self):  # minimal dummy inference to force GPU allocations
+        if not self.model_loaded:
+            self.load_model()
+        try:
+            import torch
+            import tempfile, os
+            # create a tiny fake image (RGB 64x64) and run through the same file-based path
+            dummy = np.zeros((64, 64, 3), dtype=np.uint8)
+            with tempfile.TemporaryDirectory() as td:
+                img_path = Path(td) / "dummy.png"
+                import cv2 as _cv2
+                _cv2.imwrite(str(img_path), dummy)
+                # Use existing predict pipeline (will copy & produce outputs)
+                self.predict({"inputs": {"image_path": str(img_path)}})
+            # collect post-warmup memory stats
+            cuda_avail = torch.cuda.is_available()
+            after_alloc = after_res = None
+            if cuda_avail:
+                try:  # pragma: no cover
+                    after_alloc = torch.cuda.memory_allocated(0)
+                    after_res = torch.cuda.memory_reserved(0)
+                except Exception:  # noqa
+                    pass
+            self._load_telemetry["warmup_memory_allocated"] = after_alloc
+            self._load_telemetry["warmup_memory_reserved"] = after_res
+            self._load_telemetry["warmed_up"] = True
+            return {
+                "warmed_up": True,
+                "warmup_memory_allocated": after_alloc,
+                "warmup_memory_reserved": after_res,
+            }
+        except Exception as e:  # noqa
+            self._load_telemetry["warmed_up"] = False
+            self._load_telemetry["warmup_error"] = str(e)
+            return {"warmed_up": False, "error": str(e)}
 
     # Request format: {"inputs": {"image_path": str}}
     def predict(self, request: Dict[str, Any]):

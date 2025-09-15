@@ -101,6 +101,16 @@ def handle_load_model(_msg: Dict[str, Any]):
 
 HANDLERS = {"INIT": handle_init, "PREDICT": handle_predict, "LOAD_MODEL": handle_load_model, "SHUTDOWN": handle_shutdown}
 
+# Extend handlers dynamically to include WARMUP if tool supports it after load
+def handle_warmup(_msg: Dict[str, Any]):
+    if tool_instance is None:
+        raise RuntimeError("Tool not initialized")
+    if hasattr(tool_instance, "warmup"):
+        return tool_instance.warmup()
+    return {"warmed_up": False, "reason": "no warmup method"}
+
+HANDLERS["WARMUP"] = handle_warmup
+
 
 def main():  # pragma: no cover - exercised via higher-level tests
     for line in sys.stdin:

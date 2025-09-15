@@ -34,6 +34,10 @@ class ToolManager:
         self._lifecycle: Dict[str, LifecycleState] = {}
         # last used timestamp
         self._last_used = {}
+        # telemetry collected from subprocess LOAD_MODEL responses
+        self._subprocess_telemetry = {}
+        # last warmup timestamps
+        self._last_warmup = {}
 
     def resource_snapshot(self) -> Dict[str, Any]:
         """Return a lightweight resource usage snapshot.
@@ -49,6 +53,16 @@ class ToolManager:
             "loaded_inproc": len(self._inproc_instances),
             "subprocess_workers": len(getattr(self._process_manager, "_workers", {})),
         }
+        # attach subprocess telemetry (non-huge scalar values only)
+        if getattr(self, "_subprocess_telemetry", None):
+            telem_out = {}
+            for k, v in self._subprocess_telemetry.items():
+                if isinstance(v, dict):
+                    compact = {sk: sv for sk, sv in v.items() if isinstance(sv, (int, float, str, type(None), bool))}
+                    telem_out[k] = compact
+            # add last warmup timestamps (seconds since epoch)
+            warm = {k: self._last_warmup.get(k) for k in telem_out.keys() if k in self._last_warmup}
+            snap["subprocess"] = {"telemetry": telem_out, "last_warmup": warm}
         # metrics aggregate
         agg = self.get_metrics().get("__aggregate__", {})
         snap["metrics"] = agg
@@ -182,6 +196,65 @@ class ToolManager:
             return resp.get("data")
         else:
             raise ValueError(f"Unknown load_mode {load_mode}")
+
+    # ------------------------------------------------------------------
+    # Manual warmup
+    def warmup_tool(self, tool_id: str) -> Dict[str, Any]:
+        """Manually warm up a tool.
+
+        Subprocess: send WARMUP command (worker handles absence gracefully).
+        Inproc: call .warmup() if available else ensure_model_loaded().
+        Returns status + optional telemetry.
+        """
+        meta = self.registry.get(tool_id)
+        if not meta:
+            raise ToolNotFoundError(f"Tool {tool_id} not found")
+        mode = meta.runtime.get("load_mode", "auto")
+        result: Dict[str, Any] = {"tool_id": tool_id, "runtime": mode}
+        try:
+            if mode == "subprocess":
+                self._process_manager.ensure_init(meta)
+                resp = self._process_manager.request(tool_id, {"cmd": "WARMUP"}, timeout=600)
+                if resp.get("ok"):
+                    data = resp.get("data") or {}
+                    if isinstance(data, dict):
+                        tele = self._subprocess_telemetry.setdefault(tool_id, {})
+                        tele.update({k: v for k, v in data.items() if isinstance(v, (int, float, str, type(None), bool))})
+                        self._last_warmup[tool_id] = time.time()
+                    result.update({"status": "ok", "warmup": data})
+                else:
+                    result.update({"status": "error", "error": resp.get("error")})
+            else:  # inproc
+                inst = self.get_or_create_inproc(meta)
+                tele: Dict[str, Any] = {}
+                if hasattr(inst, "warmup"):
+                    try:
+                        data = inst.warmup()  # type: ignore
+                        if isinstance(data, dict):
+                            tele.update({k: v for k, v in data.items() if isinstance(v, (int, float, str, type(None), bool))})
+                            self._last_warmup[tool_id] = time.time()
+                    except Exception as e:  # noqa
+                        result.update({"status": "error", "error": str(e)})
+                        return result
+                else:
+                    if hasattr(inst, "ensure_model_loaded"):
+                        inst.ensure_model_loaded()
+                    tele["warmed_up"] = True
+                    self._last_warmup[tool_id] = time.time()
+                result.update({"status": "ok", "warmup": tele})
+        except Exception as e:  # noqa
+            result.update({"status": "error", "error": str(e)})
+        return result
+
+    def warmup_all(self, runtime: str | None = None) -> Dict[str, Any]:
+        """Warm up all tools optionally filtered by runtime ('subprocess' or 'inproc')."""
+        results = []
+        for meta in self.registry.list():
+            rmode = meta.runtime.get("load_mode", "auto")
+            if runtime and runtime != rmode and not (runtime == "inproc" and rmode in ("auto", "inproc")):
+                continue
+            results.append(self.warmup_tool(meta.id))
+        return {"count": len(results), "results": results}
 
     def lifecycle_states(self) -> Dict[str, LifecycleState]:
         """Return a snapshot of lifecycle state per tool."""
@@ -330,7 +403,7 @@ class ToolManager:
         return {"before": before_states, "after": after_states, "actions": actions}
 
     # ------------------------------------------------------------------
-    def preload_all(self, include_subprocess: bool = False):
+    def preload_all(self, include_subprocess: bool = False, parallel_subprocess: bool = False, max_workers: int = 4):
         """Instantiate all tools and (if lazy) load their models.
 
         include_subprocess: if True also spin up subprocess tools (may be expensive).
@@ -342,7 +415,70 @@ class ToolManager:
         """
         from .logging import core_logger as _logger
         count = 0
+        subprocess_metas = []
+        regular_metas = []
         for meta in self.registry.list():
+            if meta.runtime.get("load_mode", "auto") == "subprocess":
+                subprocess_metas.append(meta)
+            else:
+                regular_metas.append(meta)
+
+        # Optionally handle subprocess tools in parallel
+        if include_subprocess and parallel_subprocess and subprocess_metas:
+            from concurrent.futures import ThreadPoolExecutor, as_completed  # pragma: no cover (timing sensitive)
+
+            def _load_subproc(meta):
+                from .logging import core_logger as _plog
+                try:
+                    wi = self._process_manager.ensure_init(meta)
+                    self._lifecycle[meta.id] = "LOADED"
+                    try:
+                        resp = self._process_manager.request(meta.id, {"cmd": "LOAD_MODEL"}, timeout=300)
+                        if resp.get("ok") is False:
+                            _plog.warning("[preload] LOAD_MODEL failed tool_id=%s resp=%s", meta.id, resp)
+                        else:
+                            data = resp.get("data") or {}
+                            if isinstance(data, dict):
+                                loaded = data.get("loaded", True)
+                                if loaded:
+                                    self._subprocess_telemetry[meta.id] = data
+                                    _plog.info(
+                                        "[preload] subprocess model loaded tool_id=%s (parallel) cuda=%s device=%s mem_delta=%s reserved_delta=%s",
+                                        meta.id,
+                                        data.get("cuda"),
+                                        data.get("device_name"),
+                                        data.get("mem_delta"),
+                                        data.get("reserved_delta"),
+                                    )
+                                    if data.get("cuda") and (data.get("mem_delta") in (0, None)):
+                                        _plog.warning(
+                                            "[preload] tool_id=%s CUDA loaded but mem_delta=%s (may allocate later)",
+                                            meta.id,
+                                            data.get("mem_delta"),
+                                        )
+                                else:
+                                    _plog.warning("[preload] subprocess model NOT loaded tool_id=%s", meta.id)
+                            else:
+                                _plog.info("[preload] subprocess model loaded tool_id=%s (parallel unstructured)", meta.id)
+                    except Exception as e:  # noqa
+                        _plog.debug("[preload] subprocess model lazy-load later tool_id=%s error=%s", meta.id, e)
+                    return True
+                except Exception as e:  # noqa
+                    _plog.exception("[preload] worker init failed tool_id=%s error=%s", meta.id, e)
+                    return False
+
+            with ThreadPoolExecutor(max_workers=max_workers) as ex:
+                futures = {ex.submit(_load_subproc, m): m for m in subprocess_metas}
+                for f in as_completed(futures):  # pragma: no cover
+                    if f.result():
+                        count += 1
+
+        # Sequential handling (remaining subprocess if not parallel, and all regular)
+        seq_list = []
+        if include_subprocess and not parallel_subprocess:
+            seq_list.extend(subprocess_metas)
+        seq_list.extend(regular_metas)
+        for meta in seq_list:
             mode = meta.runtime.get("load_mode", "auto")
             if mode == "subprocess":
                 if not include_subprocess:
@@ -367,14 +503,20 @@ class ToolManager:
                                 mem_before = data.get("mem_before")
                                 mem_after = data.get("mem_after")
                                 if loaded:
+                                    # store telemetry
+                                    self._subprocess_telemetry[meta.id] = data
                                     _logger.info(
-                                        "[preload] subprocess model loaded tool_id=%s cuda=%s device=%s mem_delta=%s bytes(before=%s after=%s)",
+                                        "[preload] subprocess model loaded tool_id=%s cuda=%s device=%s mem_delta=%s bytes(before=%s after=%s) reserved_delta=%s first_param_device=%s params=%s cuda_param_bytes=%s",
                                         meta.id,
                                         cuda_flag,
                                         device_name,
                                         mem_delta,
                                         mem_before,
                                         mem_after,
+                                        data.get("reserved_delta"),
+                                        data.get("first_param_device"),
+                                        data.get("param_count"),
+                                        data.get("cuda_param_bytes"),
                                     )
                                     if cuda_flag and (mem_delta is None or (isinstance(mem_delta, (int,float)) and mem_delta <= 0)):
                                         _logger.warning(
@@ -406,7 +548,7 @@ class ToolManager:
                 count += 1
             except Exception as e:  # noqa
                 _logger.exception("[preload] failed tool_id=%s error=%s", meta.id, e)
-        _logger.info("[preload] completed count=%d", count)
+        _logger.info("[preload] completed count=%d parallel_subprocess=%s", count, parallel_subprocess)
         return count
 
 __all__ = ["ToolManager"]

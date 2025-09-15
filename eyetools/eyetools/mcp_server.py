@@ -71,6 +71,8 @@ def create_app(
     dynamic_mark_idle_s: float = 300.0,
     dynamic_unload_s: float = 900.0,
     dynamic_interval_s: float = 60.0,
+    parallel_subprocess: bool = False,
+    parallel_subprocess_workers: int = 4,
 ):
     registry = ToolRegistry()
     # Two env vars supported for flexibility: legacy EYETOOLS_TOOL_PATHS and new EYETOOLS_EXTRA_TOOL_PATHS
@@ -182,6 +184,22 @@ def create_app(
     def admin_maintenance(mark_idle_s: float | None = Query(None), unload_idle_s: float | None = Query(None)):
         return tm.maintenance(mark_idle_s=mark_idle_s, unload_idle_s=unload_idle_s)
 
+    @app.post("/admin/warmup")
+    def admin_warmup(tool_id: str = Query(...)):
+        try:
+            return tm.warmup_tool(tool_id)
+        except Exception as e:  # noqa
+            raise HTTPException(status_code=400, detail=str(e))
+
+    @app.post("/admin/warmup_all")
+    def admin_warmup_all(runtime: str | None = Query(None, description="Filter: subprocess|inproc")):
+        if runtime not in (None, "subprocess", "inproc"):
+            raise HTTPException(status_code=400, detail="runtime must be subprocess or inproc")
+        try:
+            return tm.warmup_all(runtime=runtime)
+        except Exception as e:  # noqa
+            raise HTTPException(status_code=500, detail=str(e))
+
     @app.get("/admin/config")
     def admin_config():
         ctx = app.state.discovery_ctx
@@ -201,8 +219,15 @@ def create_app(
         app.state.lifecycle_mode = lifecycle_mode
         if lifecycle_mode == "eager":
             # In eager mode we always include subprocess tools regardless of legacy preload_subprocess flag
-            core_logger.info("[lifecycle] eager mode: preloading all tools (include_subprocess=True)")
-            tm.preload_all(include_subprocess=True)  # eager always includes subprocess
+            core_logger.info(
+                "[lifecycle] eager mode: preloading all tools (include_subprocess=True parallel_subprocess=%s)",
+                parallel_subprocess,
+            )
+            tm.preload_all(
+                include_subprocess=True,
+                parallel_subprocess=parallel_subprocess,
+                max_workers=parallel_subprocess_workers,
+            )  # eager always includes subprocess
         elif lifecycle_mode == "lazy":
             core_logger.info("[lifecycle] lazy mode: models load on first request")
             # nothing extra

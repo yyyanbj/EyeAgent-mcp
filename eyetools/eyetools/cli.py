@@ -58,6 +58,17 @@ def build_parser():
         default=60.0,
         help="(dynamic mode) maintenance loop interval in seconds",
     )
+    serve.add_argument(
+        "--parallel-subprocess",
+        action="store_true",
+        help="Preload subprocess tools in parallel threads (eager mode recommended)",
+    )
+    serve.add_argument(
+        "--parallel-subprocess-workers",
+        type=int,
+        default=4,
+        help="Max worker threads for parallel subprocess preload",
+    )
     return p
 
 
@@ -83,6 +94,8 @@ def main(argv=None):
         dynamic_mark_idle_s=getattr(args, "dynamic_mark_idle_s", 300.0),
         dynamic_unload_s=getattr(args, "dynamic_unload_s", 900.0),
         dynamic_interval_s=getattr(args, "dynamic_interval_s", 60.0),
+        parallel_subprocess=getattr(args, "parallel_subprocess", False),
+        parallel_subprocess_workers=getattr(args, "parallel_subprocess_workers", 4),
     )
     uvicorn.run(app, host=args.host, port=args.port, reload=args.reload)
     return 0
