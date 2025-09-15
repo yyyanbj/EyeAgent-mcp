@@ -4,7 +4,7 @@ category: vision
 shared:
   environment_ref: py312-seg
   runtime:
-    load_mode: auto
+    load_mode: subprocess  # heavy nnUNet models run in isolated uv overlay env
     idle_timeout_s: 900
     device_policy: auto
     preload: false

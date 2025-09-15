@@ -15,7 +15,8 @@ def test_segmentation_config_discovery(tmp_path):
     assert seg_variants, 'segmentation variants not discovered'
     # pick one variant
     sample = next(m for m in seg_variants if m.variant == 'cfp_artifact')
-    assert sample.runtime.get('load_mode') == 'auto'
+    # segmentation runtime now uses subprocess for heavy deps isolation
+    assert sample.runtime.get('load_mode') == 'subprocess'
 
 
 def test_segmentation_mock_predict(tmp_path, monkeypatch):

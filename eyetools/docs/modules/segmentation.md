@@ -54,3 +54,35 @@ The implementation is self-contained; all lesion color and model id mapping logi
 - Heavy nnUNet inference is only triggered on first prediction (lazy load).
 - Mock test `test_segmentation_mock_predict` ensures CI stays lightweight.
 
+## Demo Scripts
+Two helper scripts illustrate real vs. fallback inference and a simple MCP client interaction.
+
+### `scripts/demo_segmentation.py`
+Run a segmentation variant on a sample image. Supports two modes:
+
+- `real` (default): attempts to load nnUNet model weights under `weights/segmentation/`.
+- `fallback`: skips model loading and produces a synthetic mask so you can observe the output structure instantly.
+
+Example (fallback for quick preview):
+```bash
+python scripts/demo_segmentation.py \
+	--variant cfp_artifact \
+	--image examples/test_images/Artifact.jpg \
+	--mode fallback
+```
+
+Attempt real inference (requires proper nnUNet weights present):
+```bash
+python scripts/demo_segmentation.py \
+	--variant cfp_artifact \
+	--image examples/test_images/Artifact.jpg
+```
+
+Outputs (merged mask, colorized label map, overlay) are written next to the input image with suffixes, and a JSON summary is printed.
+
+### `scripts/mcp_client_demo.py`
+Illustrates how an MCP client could call the segmentation tool through the running server. Adapt this script for integration into your own agent or UI layer.
+
+---
+If you invoke these scripts from within a subdirectory, they dynamically insert the project root into `sys.path` so imports remain robust.
+

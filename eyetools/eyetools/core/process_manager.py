@@ -34,16 +34,33 @@ class ProcessManager:
         with self._lock:
             if tool_id in self._workers:
                 return self._workers[tool_id]
-            # Build uv command if python/extra requires specified
+            # Build uv command if environment_ref/python/extra requires specified
             entrypoint: List[str]
-            if meta and (getattr(meta, 'python', None) or getattr(meta, 'extra_requires', None)):
-                extra = meta.extra_requires or []
-                with_arg = ",".join(extra) if extra else None
+            if meta and (getattr(meta, 'environment_ref', None) or getattr(meta, 'python', None) or getattr(meta, 'extra_requires', None)):
                 entrypoint = ["uv", "run"]
-                if with_arg:
-                    entrypoint += ["--with", with_arg]
+                deps: List[str] = []
+                py_exec: str | None = None
+                try:
+                    # Use EnvManager resolution to collect deps & python tag if environment_ref present
+                    if getattr(meta, 'environment_ref', None):
+                        py_tag, deps = self.env_manager._resolve_env_ref(meta.__dict__)  # type: ignore[attr-defined]
+                        shorthand_map = {"py312": "python3.12", "py310": "python3.10", "py311": "python3.11"}
+                        py_exec = shorthand_map.get(py_tag, py_tag)
+                except Exception:  # pragma: no cover
+                    pass
+                # Merge explicit extra_requires if any (avoid duplicates)
+                extra = list(getattr(meta, 'extra_requires', []) or [])
+                for e in extra:
+                    if e not in deps:
+                        deps.append(e)
+                # Append --with flags
+                for dep in deps:
+                    entrypoint += ["--with", dep]
+                # Python selection precedence: explicit meta.python overrides env_ref resolution
                 if getattr(meta, 'python', None):
-                    entrypoint += [f"--python={meta.python}"]
+                    py_exec = getattr(meta, 'python')
+                if py_exec:
+                    entrypoint += [f"--python={py_exec}"]
                 entrypoint += ["-m", "eyetools.core.worker_entry"]
             else:
                 entrypoint = [sys.executable, "-m", "eyetools.core.worker_entry"]
@@ -69,8 +86,20 @@ class ProcessManager:
             if (time.time() - start) > timeout:
                 raise TimeoutError("Timeout waiting for worker response")
             line = wi.process.stdout.readline()
-            if line:
+            if not line:
+                time.sleep(0.01)
+                continue
+            line = line.strip()
+            if not line:
+                continue
+            try:
                 return json.loads(line)
+            except json.JSONDecodeError:
+                # Skip lines that are not valid JSON (e.g., 'Built package==version')
+                if line.startswith(("Built ", "Installed ", "Downloading", "[", "Preparing")):
+                    continue
+                # As a safeguard, ignore any other stray stdout
+                continue
             time.sleep(0.01)
 
     def request(self, tool_id: str, payload: Dict, timeout: float = 30.0) -> Dict:

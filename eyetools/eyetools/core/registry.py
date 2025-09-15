@@ -22,6 +22,7 @@ class ToolMeta:
     extra_requires: List[str] = field(default_factory=list)
     python: Optional[str] = None
     category: Optional[str] = None
+    environment_ref: Optional[str] = None
 
 
 class ToolRegistry:

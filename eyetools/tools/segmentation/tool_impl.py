@@ -99,6 +99,7 @@ def _get_config(task: str):
 
 
 def _load_predictor(model_id: int, weights_root: Path):
+    print(f"[seg] loading predictor model_id={model_id} weights_root={weights_root}")
     from batchgenerators.utilities.file_and_folder_operations import subdirs, join
     from nnunetv2.inference.predict_from_raw_data import nnUNetPredictor
     from nnunetv2.utilities.file_path_utilities import convert_trainer_plans_config_to_identifier
@@ -123,6 +124,7 @@ def _load_predictor(model_id: int, weights_root: Path):
         dataset_dir,
         convert_trainer_plans_config_to_identifier("nnUNetTrainer", "nnUNetPlans", "2d"),
     )
+    print(f"[seg] resolved model_folder={model_folder}")
     predictor.initialize_from_trained_model_folder(
         model_folder,
         use_folds=(0,),
@@ -176,6 +178,8 @@ class SegmentationTool(ToolBase):
         self.temp_dir = Path(params.get("base_path", "temp/segmentation")) / self.task
         self.weights_root = Path(params.get("weights_root", "weights/segmentation"))
         self.min_object_size = int(params.get("min_object_size", 1))
+        # optional offset if weight directory numbering differs from internal mapping
+        self.model_id_offset = int(params.get("model_id_offset", 0))
         self.predictor = None
         self.lesions: Dict[str, Any] = {}
         self.model_id: Optional[int] = None
@@ -191,6 +195,8 @@ class SegmentationTool(ToolBase):
         if self.predictor is not None:
             return
         self.lesions, self.model_id = _get_config(self.task)
+        if self.model_id_offset:
+            self.model_id = self.model_id + self.model_id_offset
         self.predictor = _load_predictor(self.model_id, self.weights_root)
         self._model_loaded = True
 
@@ -222,11 +228,37 @@ class SegmentationTool(ToolBase):
             None,
         )
         # load seg
-        seg_path = self.temp_dir / "pred" / f"{Path(image_path).stem}.png"
-        import cv2 as _cv2
+        pred_dir = self.temp_dir / "pred"
+        seg_path = pred_dir / f"{Path(image_path).stem}.png"
+        import cv2 as _cv2, os as _os
         seg = _cv2.imread(str(seg_path), _cv2.IMREAD_GRAYSCALE)
         if seg is None:
-            raise RuntimeError("Segmentation output missing")
+            # Attempt fallback: if only one png exists in pred_dir, use it
+            pngs = list(pred_dir.glob('*.png'))
+            if len(pngs) == 1:
+                seg_path = pngs[0]
+                seg = _cv2.imread(str(seg_path), _cv2.IMREAD_GRAYSCALE)
+            else:
+                # Try nii.gz
+                niis = list(pred_dir.glob('*.nii.gz'))
+                if niis:
+                    try:
+                        import nibabel as nib
+                        nii = nib.load(str(niis[0]))
+                        data = nii.get_fdata().astype('uint8')
+                        seg = data.squeeze()
+                        # Save a png for downstream steps
+                        _cv2.imwrite(str(pred_dir / (niis[0].stem + '.png')), seg)
+                        seg_path = pred_dir / (niis[0].stem + '.png')
+                    except Exception as e:  # pragma: no cover
+                        pass
+        if seg is None:
+            listing = [p.name for p in pred_dir.glob('*')]
+            raise RuntimeError(f"Segmentation output missing. Expected {seg_path.name}. Dir listing={listing}")
+        # Normalize binary-like masks (0,255) to {0,1}
+        uniques = np.unique(seg)
+        if set(uniques.tolist()) <= {0, 255}:
+            seg = (seg > 0).astype(np.uint8)
         orig = _cv2.imread(image_path)
         h, w = orig.shape[:2]
         seg = _cv2.resize(seg, (w, h), interpolation=_cv2.INTER_NEAREST)

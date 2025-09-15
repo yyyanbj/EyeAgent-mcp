@@ -40,6 +40,7 @@ def discover_tools(root_dirs: List[Path], registry: ToolRegistry, errors: List[s
                         extra_requires=c.get("extra_requires", []),
                         python=c.get("python") or c.get("shared", {}).get("python"),
                         category=c.get("category"),
+                        environment_ref=(c.get("environment_ref") or c.get("shared", {}).get("environment_ref")),
                     )
                     try:
                         registry.register(meta)
@@ -77,6 +78,7 @@ def discover_tools(root_dirs: List[Path], registry: ToolRegistry, errors: List[s
                         extra_requires=c.get("extra_requires", []),
                         python=c.get("python") or c.get("shared", {}).get("python"),
                         category=c.get("category"),
+                        environment_ref=(c.get("environment_ref") or c.get("shared", {}).get("environment_ref")),
                     )
                     try:
                         registry.register(meta)

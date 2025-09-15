@@ -79,12 +79,10 @@ class EnvManager:
         shorthand_map = {"py312": "python3.12", "py310": "python3.10", "py311": "python3.11"}
         exec_tag = shorthand_map.get(python_tag, python_tag)
         env_key = self.build_env_key(python_tag, deps)
-        with_parts = []
-        if deps:
-            with_parts.append(",".join(deps))
         cmd = ["uv", "run"]
-        if with_parts:
-            cmd += ["--with", with_parts[0]]
+        # Pass each dependency as its own --with flag so uv resolves them individually
+        for dep in deps:
+            cmd += ["--with", dep]
         cmd += [f"--python={exec_tag}"]
         cmd += args
         cp = subprocess.run(cmd, cwd=str(cwd or self.workspace_root), capture_output=True, text=True)

@@ -6,6 +6,10 @@ Included tool packages (auto-discovered under `tools/`):
 - Classification (`tools/classification`) – image classification variants
 - Segmentation (`tools/segmentation`) – medical image segmentation (nnUNetv2) using dedicated environment `py312-seg`
 
+Helper demo scripts:
+- `scripts/demo_segmentation.py` – run a segmentation variant on a sample image (real or fallback synthetic inference)
+- `scripts/mcp_client_demo.py` – example of invoking the tool via an MCP client workflow
+
 See `docs/modules` for architecture and module details.
 
 ## Installation
@@ -36,6 +40,18 @@ uv run --with nnunetv2 --python=python3.12 python -c "import nnunetv2; print('nn
 ```
 
 Or just invoke a segmentation tool; dependencies will resolve on first use via `EnvManager`.
+
+#### Quick Demo (Fallback Mode)
+Run a fast synthetic segmentation (no model load) to see outputs structure:
+```bash
+python scripts/demo_segmentation.py --variant cfp_artifact --image examples/test_images/Artifact.jpg --mode fallback
+```
+
+#### Real Inference
+Place nnUNet weights under `weights/segmentation/Dataset000_artifact` (etc.) then:
+```bash
+python scripts/demo_segmentation.py --variant cfp_artifact --image examples/test_images/Artifact.jpg
+```
 
 ### Quick Programmatic Example
 ```python

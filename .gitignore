@@ -211,5 +211,7 @@ uv.lock
 langchain_tool_src/
 envs/
 weights/
+test_images/
+temp/
 
 *.zip
