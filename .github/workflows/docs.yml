@@ -57,7 +57,7 @@ jobs:
           path = pathlib.Path('mkdocs.generated.yml')
           path.write_text(yaml.safe_dump(data, sort_keys=False, allow_unicode=True))
           print('[nav] generated mkdocs.generated.yml')
-PY
+          PY
 
       - name: Build site
         run: mkdocs build --strict -f mkdocs.generated.yml
