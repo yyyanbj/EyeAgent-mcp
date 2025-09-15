@@ -1,9 +1,10 @@
 """Subprocess worker entrypoint (minimal JSON line protocol).
 
 Protocol messages (one JSON per line stdin->stdout):
-  {"cmd": "INIT", "meta": {...}}
-  {"cmd": "PREDICT", "request": {...}}
-  {"cmd": "SHUTDOWN"}
+    {"cmd": "INIT", "meta": {...}}
+    {"cmd": "PREDICT", "request": {...}}
+    {"cmd": "LOAD_MODEL"}            (optional: force model load if lazy)
+    {"cmd": "SHUTDOWN"}
 
 Responses:
   {"ok": bool, "cmd": <cmd>, "data"|"error": ...}
@@ -57,17 +58,19 @@ def handle_init(msg: Dict[str, Any]):
     tool_instance = ToolCls(tool_meta, params)
     if hasattr(tool_instance, "prepare"):
         tool_instance.prepare()
-    return {"tool_id": tool_meta.get("id")}
+    # If lifecycle eager wants preloaded model it will call LOAD_MODEL explicitly; INIT stays lightweight.
+    return {"tool_id": tool_meta.get("id"), "lazy": tool_meta.get("model", {}).get("lazy", True)}
 
 
 def handle_predict(msg: Dict[str, Any]):
     if tool_instance is None or tool_meta is None:
         raise RuntimeError("Tool not initialized; INIT must be called first")
-    # Lazy model load
-    if tool_meta.get("model", {}).get("lazy", True):
-        # DemoTemplateTool doesn't have ensure_model_loaded; emulate
-        if getattr(tool_instance, "model_loaded", False) is False and hasattr(tool_instance, "load_model"):
+    # Ensure model loaded (predict path safeguards even if eager preload failed)
+    if getattr(tool_instance, "model_loaded", False) is False and hasattr(tool_instance, "load_model"):
+        try:
             tool_instance.load_model()
+        except Exception as e:  # noqa
+            raise RuntimeError(f"Model load failed: {e}")
     request = msg.get("request", {})
     return tool_instance.predict(request)
 
@@ -79,11 +82,24 @@ def handle_shutdown(_msg: Dict[str, Any]):
     return {"bye": True}
 
 
-HANDLERS = {
-    "INIT": handle_init,
-    "PREDICT": handle_predict,
-    "SHUTDOWN": handle_shutdown,
-}
+def handle_load_model(_msg: Dict[str, Any]):
+    if tool_instance is None or tool_meta is None:
+        raise RuntimeError("Tool not initialized")
+    if hasattr(tool_instance, "load_model") and getattr(tool_instance, "model_loaded", False) is False:
+        tool_instance.load_model()
+    resp = {"loaded": getattr(tool_instance, "model_loaded", False)}
+    # Attach optional telemetry if tool provided it (segmentation tool sets _load_telemetry)
+    telem = getattr(tool_instance, "_load_telemetry", None)
+    if isinstance(telem, dict):  # minimal filtering to keep JSON-serializable
+        safe = {}
+        for k, v in telem.items():
+            if isinstance(v, (str, int, float, type(None), bool)):
+                safe[k] = v
+        resp.update(safe)
+    return resp
+
+
+HANDLERS = {"INIT": handle_init, "PREDICT": handle_predict, "LOAD_MODEL": handle_load_model, "SHUTDOWN": handle_shutdown}
 
 
 def main():  # pragma: no cover - exercised via higher-level tests

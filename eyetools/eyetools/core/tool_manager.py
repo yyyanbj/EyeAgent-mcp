@@ -32,6 +32,46 @@ class ToolManager:
         self._metrics: Dict[str, Dict[str, Any]] = {}
         # lifecycle states per tool id
         self._lifecycle: Dict[str, LifecycleState] = {}
+        # last used timestamp
+        self._last_used = {}
+
+    def resource_snapshot(self) -> Dict[str, Any]:
+        """Return a lightweight resource usage snapshot.
+        Includes:
+          - counts: discovered, loaded_inproc, subprocess_workers
+          - memory (RSS in MB) if psutil available
+          - aggregate metrics summary
+        GPU memory is omitted unless torch + cuda available; then reports total + allocated.
+        """
+        snap: Dict[str, Any] = {}
+        snap["counts"] = {
+            "discovered": len(self.registry.list()),
+            "loaded_inproc": len(self._inproc_instances),
+            "subprocess_workers": len(getattr(self._process_manager, "_workers", {})),
+        }
+        # metrics aggregate
+        agg = self.get_metrics().get("__aggregate__", {})
+        snap["metrics"] = agg
+        # process RSS
+        try:  # pragma: no cover - psutil optional
+            import psutil  # type: ignore
+            proc = psutil.Process()
+            rss_mb = proc.memory_info().rss / (1024 * 1024)
+            snap["memory"] = {"rss_mb": round(rss_mb, 2)}
+        except Exception:  # noqa
+            snap["memory"] = {"rss_mb": None}
+        # GPU (best-effort)
+        try:  # pragma: no cover - optional
+            import torch  # type: ignore
+            if torch.cuda.is_available():
+                snap["gpu"] = {
+                    "device_count": torch.cuda.device_count(),
+                    "allocated_mb": round(torch.cuda.memory_allocated() / (1024 * 1024), 2),
+                    "reserved_mb": round(torch.cuda.memory_reserved() / (1024 * 1024), 2),
+                }
+        except Exception:  # noqa
+            pass
+        return snap
 
     def _import_entry(self, meta: ToolMeta):
         entry = meta.entry
@@ -99,6 +139,7 @@ class ToolManager:
                 inst.ensure_model_loaded()
                 core_logger.debug(f"lazy model load tool_id={meta.id} took={(time.time()-before_load)*1000:.1f}ms")
             self._inproc_lru[meta.id] = time.time()
+            self._last_used[meta.id] = self._inproc_lru[meta.id]
             # LRU eviction if over limit
             if len(self._inproc_instances) > self._max_inproc:
                 # evict oldest non-pinned
@@ -146,6 +187,16 @@ class ToolManager:
         """Return a snapshot of lifecycle state per tool."""
         return self._lifecycle.copy()
 
+    def lifecycle_states_detailed(self) -> Dict[str, Dict[str, Any]]:
+        out: Dict[str, Dict[str, Any]] = {}
+        for tid, state in self._lifecycle.items():
+            out[tid] = {
+                "state": state,
+                "last_used": self._last_used.get(tid),
+                "loaded": tid in self._inproc_instances,
+            }
+        return out
+
     def mark_idle(self, older_than_s: float = 300.0):
         """Mark LOADED tools as IDLE if last used before threshold (no unload)."""
         now = time.time()
@@ -167,6 +218,44 @@ class ToolManager:
                 self._inproc_lru.pop(tid, None)
                 self._lifecycle[tid] = "UNLOADED"
 
+    def unload(self, tool_id: str) -> bool:
+        """Explicitly unload a single inproc tool. Returns True if unloaded."""
+        inst = self._inproc_instances.pop(tool_id, None)
+        if not inst:
+            return False
+        if hasattr(inst, "release"):
+            try:
+                inst.release()
+            except Exception:  # noqa
+                core_logger.exception(f"release failed tool_id={tool_id}")
+        self._inproc_lru.pop(tool_id, None)
+        self._lifecycle[tool_id] = "UNLOADED"
+        return True
+
+    def unload_any(self, tool_id: str) -> bool:
+        """Unload either an inproc tool or a subprocess worker.
+
+        Returns True if something was unloaded/terminated, False otherwise.
+        """
+        meta = self.registry.get(tool_id)
+        if not meta:
+            return False
+        mode = meta.runtime.get("load_mode", "auto")
+        if mode in ("auto", "inproc"):
+            return self.unload(tool_id)
+        elif mode == "subprocess":
+            # terminate worker if running
+            workers = getattr(self._process_manager, "_workers", {})
+            if tool_id in workers:
+                try:
+                    self._process_manager.stop(tool_id)
+                except Exception:  # noqa
+                    core_logger.exception(f"stop worker failed tool_id={tool_id}")
+                self._lifecycle[tool_id] = "UNLOADED"
+                return True
+            return False
+        return False
+
     def get_metrics(self, tool_id: str | None = None):
         """Return metrics for a single tool or all tools.
         If tool_id is None returns dict of all metrics plus aggregate summary under key '__aggregate__'."""
@@ -184,11 +273,70 @@ class ToolManager:
         all_metrics["__aggregate__"] = aggregate
         return all_metrics
 
+    def ensure_loaded(self, tool_id: str, include_model: bool = True):
+        """Ensure a tool is loaded/initialized based on its load_mode.
+
+        For inproc/auto: instantiate (if needed) and optionally force lazy model load.
+        For subprocess: spawn worker & perform INIT (model load is deferred unless protocol extends).
+        Returns dict with {mode, tool_id, status}.
+        """
+        meta = self.registry.get(tool_id)
+        if not meta:
+            raise ToolNotFoundError(f"Tool {tool_id} not found")
+        mode = meta.runtime.get("load_mode", "auto")
+        if mode in ("auto", "inproc"):
+            inst = self.get_or_create_inproc(meta)
+            if include_model and meta.model.get("lazy", True) and hasattr(inst, "ensure_model_loaded"):
+                inst.ensure_model_loaded()
+            return {"tool_id": tool_id, "mode": mode, "status": "loaded"}
+        elif mode == "subprocess":
+            self._process_manager.ensure_init(meta)
+            # Optionally could add LOAD_MODEL command in future if protocol extended
+            self._lifecycle.setdefault(tool_id, "REGISTERED")
+            self._lifecycle[tool_id] = "LOADED"
+            return {"tool_id": tool_id, "mode": mode, "status": "worker_started"}
+        else:
+            raise ValueError(f"Unknown load_mode {mode}")
+
+    def maintenance(self, mark_idle_s: float | None = None, unload_idle_s: float | None = None) -> Dict[str, Any]:
+        """Run maintenance operations (mark idle, unload idle) and return a summary.
+
+        mark_idle_s: if provided, tools not used for > seconds are transitioned LOADED->IDLE.
+        unload_idle_s: if provided, tools not used for > seconds are fully unloaded (inproc) or subprocess workers stopped.
+        Note: subprocess worker auto-stop currently not time-based here (could be extended); only inproc unloads.
+        """
+        before_states = self.lifecycle_states().copy()
+        now = time.time()
+        actions: Dict[str, Any] = {"marked_idle": [], "unloaded": []}
+        if mark_idle_s is not None:
+            # replicate mark_idle logic with explicit threshold
+            for tid, last_ts in list(self._inproc_lru.items()):
+                if (now - last_ts) > mark_idle_s and self._lifecycle.get(tid) == "LOADED":
+                    self._lifecycle[tid] = "IDLE"
+                    actions["marked_idle"].append(tid)
+        if unload_idle_s is not None:
+            for tid, last_ts in list(self._inproc_lru.items()):
+                if (now - last_ts) > unload_idle_s:
+                    inst = self._inproc_instances.pop(tid, None)
+                    if inst and hasattr(inst, "release"):
+                        try:
+                            inst.release()
+                        except Exception:  # noqa
+                            core_logger.exception(f"release failed tool_id={tid}")
+                    self._inproc_lru.pop(tid, None)
+                    self._lifecycle[tid] = "UNLOADED"
+                    actions["unloaded"].append(tid)
+        after_states = self.lifecycle_states().copy()
+        return {"before": before_states, "after": after_states, "actions": actions}
+
     # ------------------------------------------------------------------
     def preload_all(self, include_subprocess: bool = False):
         """Instantiate all tools and (if lazy) load their models.
 
         include_subprocess: if True also spin up subprocess tools (may be expensive).
+        For subprocess tools we currently only INIT the worker; model weights may still
+        be lazily loaded on first PREDICT unless/until a future LOAD_MODEL protocol
+        extension is issued. (A placeholder will be added if handler exists.)
         Exceptions during individual tool preload are logged and skipped so one
         broken tool doesn't block server startup.
         """
@@ -196,8 +344,53 @@ class ToolManager:
         count = 0
         for meta in self.registry.list():
             mode = meta.runtime.get("load_mode", "auto")
-            if mode == "subprocess" and not include_subprocess:
-                _logger.info("[preload] skip subprocess tool_id=%s (include_subprocess=False)", meta.id)
+            if mode == "subprocess":
+                if not include_subprocess:
+                    _logger.info("[preload] skip subprocess tool_id=%s (include_subprocess=False)", meta.id)
+                    continue
+                # start worker (INIT)
+                try:
+                    wi = self._process_manager.ensure_init(meta)
+                    self._lifecycle[meta.id] = "LOADED"
+                    # Attempt forced model load if protocol supports it
+                    try:  # pragma: no cover (depends on model availability)
+                        resp = self._process_manager.request(meta.id, {"cmd": "LOAD_MODEL"}, timeout=300)
+                        if resp.get("ok") is False:
+                            _logger.warning("[preload] LOAD_MODEL failed tool_id=%s resp=%s", meta.id, resp)
+                        else:
+                            data = resp.get("data") or {}
+                            if isinstance(data, dict):
+                                loaded = data.get("loaded", True)
+                                cuda_flag = data.get("cuda")
+                                device_name = data.get("device_name")
+                                mem_delta = data.get("mem_delta")
+                                mem_before = data.get("mem_before")
+                                mem_after = data.get("mem_after")
+                                if loaded:
+                                    _logger.info(
+                                        "[preload] subprocess model loaded tool_id=%s cuda=%s device=%s mem_delta=%s bytes(before=%s after=%s)",
+                                        meta.id,
+                                        cuda_flag,
+                                        device_name,
+                                        mem_delta,
+                                        mem_before,
+                                        mem_after,
+                                    )
+                                    if cuda_flag and (mem_delta is None or (isinstance(mem_delta, (int,float)) and mem_delta <= 0)):
+                                        _logger.warning(
+                                            "[preload] tool_id=%s reported loaded on CUDA but mem_delta=%s (may allocate later during first predict)",
+                                            meta.id,
+                                            mem_delta,
+                                        )
+                                else:
+                                    _logger.warning("[preload] subprocess model NOT loaded (weights missing?) tool_id=%s", meta.id)
+                            else:
+                                _logger.info("[preload] subprocess model loaded tool_id=%s (unstructured data)", meta.id)
+                    except Exception as e:  # noqa
+                        _logger.debug("[preload] subprocess model lazy-load will occur on first predict tool_id=%s error=%s", meta.id, e)
+                    count += 1
+                except Exception as e:  # noqa
+                    _logger.exception("[preload] worker init failed tool_id=%s error=%s", meta.id, e)
                 continue
             try:
                 inst = self.get_or_create_inproc(meta) if mode in ("auto", "inproc") else None

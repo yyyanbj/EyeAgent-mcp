@@ -61,7 +61,17 @@ def _compute_tool_paths(include_examples: bool, extra_paths: List[str]) -> List[
     return dedup
 
 
-def create_app(include_examples: bool = False, tool_paths: Optional[List[str]] = None, role_config_path: Optional[str] = None, preload: bool = False, preload_subprocess: bool = False):
+def create_app(
+    include_examples: bool = False,
+    tool_paths: Optional[List[str]] = None,
+    role_config_path: Optional[str] = None,
+    preload: bool = False,
+    preload_subprocess: bool = False,
+    lifecycle_mode: Optional[str] = None,
+    dynamic_mark_idle_s: float = 300.0,
+    dynamic_unload_s: float = 900.0,
+    dynamic_interval_s: float = 60.0,
+):
     registry = ToolRegistry()
     # Two env vars supported for flexibility: legacy EYETOOLS_TOOL_PATHS and new EYETOOLS_EXTRA_TOOL_PATHS
     extra_paths_env = os.getenv("EYETOOLS_TOOL_PATHS", "")
@@ -123,18 +133,126 @@ def create_app(include_examples: bool = False, tool_paths: Optional[List[str]] =
         return {"tool_id": req.tool_id, "data": data}
 
     @app.get("/metrics")
-    def metrics():
-        return tm.get_metrics()
+    def metrics(tool_id: Optional[str] = Query(None)):
+        return tm.get_metrics(tool_id=tool_id)
 
-    # Optionally preload models (may allocate GPU memory)
-    if preload:
-        core_logger.info("Preloading all tools (subprocess=%s)...", preload_subprocess)
-        tm.preload_all(include_subprocess=preload_subprocess)
+    @app.get("/lifecycle")
+    def lifecycle(detailed: bool = Query(False)):
+        return tm.lifecycle_states_detailed() if detailed else tm.lifecycle_states()
+
+    @app.post("/admin/reload")
+    def admin_reload(preload_models: bool = False):
+        """Rediscover tools using original discovery context.
+        Optionally preload models again.
+        """
+        ctx = app.state.discovery_ctx
+        registry.clear()
+        errors = discover_tools(_compute_tool_paths(ctx["include_examples"], (ctx["tool_paths"] or [])), registry)
+        if errors:
+            for e in errors:
+                core_logger.warning(f"reload discover error: {e}")
+        if preload_models:
+            tm.preload_all()
+        return {"tools": [m.id for m in registry.list()], "errors": [str(e) for e in errors]}
+
+    @app.post("/admin/evict")
+    def admin_evict(tool_id: str = Query(...)):
+        # unified unload supporting inproc or subprocess workers
+        ok = tm.unload_any(tool_id)
+        if not ok:
+            raise HTTPException(status_code=404, detail="Tool not loaded or not found")
+        return {"tool_id": tool_id, "status": "unloaded"}
+
+    @app.post("/admin/preload/{tool_id}")
+    def admin_preload_one(tool_id: str):
+        meta = registry.get(tool_id)
+        if not meta:
+            raise HTTPException(status_code=404, detail="Tool not found")
+        try:
+            result = tm.ensure_loaded(tool_id)
+        except Exception as e:  # noqa
+            raise HTTPException(status_code=500, detail=str(e))
+        return result
+
+    @app.get("/admin/resources")
+    def admin_resources():
+        return tm.resource_snapshot()
+
+    @app.post("/admin/maintenance")
+    def admin_maintenance(mark_idle_s: float | None = Query(None), unload_idle_s: float | None = Query(None)):
+        return tm.maintenance(mark_idle_s=mark_idle_s, unload_idle_s=unload_idle_s)
+
+    @app.get("/admin/config")
+    def admin_config():
+        ctx = app.state.discovery_ctx
+        return {
+            "lifecycle_mode": ctx.get("lifecycle_mode"),
+            "dynamic_mark_idle_s": ctx.get("dynamic_mark_idle_s"),
+            "dynamic_unload_s": ctx.get("dynamic_unload_s"),
+            "dynamic_interval_s": ctx.get("dynamic_interval_s"),
+            "tool_paths": ctx.get("tool_paths"),
+            "include_examples": ctx.get("include_examples"),
+        }
+
+    # Lifecycle mode handling precedence:
+    # 1. lifecycle_mode if provided (eager|lazy|dynamic)
+    # 2. fallback to legacy --preload flags
+    if lifecycle_mode:
+        app.state.lifecycle_mode = lifecycle_mode
+        if lifecycle_mode == "eager":
+            # In eager mode we always include subprocess tools regardless of legacy preload_subprocess flag
+            core_logger.info("[lifecycle] eager mode: preloading all tools (include_subprocess=True)")
+            tm.preload_all(include_subprocess=True)  # eager always includes subprocess
+        elif lifecycle_mode == "lazy":
+            core_logger.info("[lifecycle] lazy mode: models load on first request")
+            # nothing extra
+        elif lifecycle_mode == "dynamic":
+            core_logger.info(
+                "[lifecycle] dynamic mode: lazy load + background maintenance idle=%ss unload=%ss interval=%ss",
+                dynamic_mark_idle_s,
+                dynamic_unload_s,
+                dynamic_interval_s,
+            )
+            # Start background maintenance task
+            import asyncio
+
+            async def _maintenance_loop():  # pragma: no cover (timing loop)
+                await asyncio.sleep(dynamic_interval_s)
+                while True:
+                    try:
+                        tm.maintenance(mark_idle_s=dynamic_mark_idle_s, unload_idle_s=dynamic_unload_s)
+                    except Exception as e:  # noqa
+                        core_logger.exception(f"maintenance loop error: {e}")
+                    await asyncio.sleep(dynamic_interval_s)
+
+            @app.on_event("startup")
+            async def _start_maintenance():  # pragma: no cover
+                if getattr(app.state, "_maintenance_started", False):
+                    return
+                loop = asyncio.get_event_loop()
+                loop.create_task(_maintenance_loop())
+                app.state._maintenance_started = True
+        else:
+            core_logger.warning("Unknown lifecycle_mode=%s (ignored)", lifecycle_mode)
+    else:
+        # Legacy preload behavior
+        if preload:
+            core_logger.info("Preloading all tools (subprocess=%s)...", preload_subprocess)
+            tm.preload_all(include_subprocess=preload_subprocess)
 
     # Expose references for instrumentation/introspection
     app.state.tool_manager = tm
     app.state.registry = registry
     app.state.role_router = role_router
+    app.state.discovery_ctx = {
+        "include_examples": include_examples,
+        "tool_paths": tool_paths,
+        "role_config_path": role_config_path,
+        "lifecycle_mode": lifecycle_mode,
+        "dynamic_mark_idle_s": dynamic_mark_idle_s,
+        "dynamic_unload_s": dynamic_unload_s,
+        "dynamic_interval_s": dynamic_interval_s,
+    }
 
     return app
 

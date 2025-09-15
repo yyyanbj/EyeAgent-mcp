@@ -183,6 +183,7 @@ class SegmentationTool(ToolBase):
         self.predictor = None
         self.lesions: Dict[str, Any] = {}
         self.model_id: Optional[int] = None
+        self.model_loaded = False
 
     def prepare(self):  # lightweight
         # create dirs
@@ -197,8 +198,43 @@ class SegmentationTool(ToolBase):
         self.lesions, self.model_id = _get_config(self.task)
         if self.model_id_offset:
             self.model_id = self.model_id + self.model_id_offset
+        before_mem = None
+        after_mem = None
+        cuda_avail = torch.cuda.is_available()
+        device_name = None
+        if cuda_avail:
+            try:  # pragma: no cover - depends on runtime GPU
+                device_name = torch.cuda.get_device_name(0)
+                before_mem = torch.cuda.memory_allocated(0)
+            except Exception:  # noqa: BLE001
+                pass
         self.predictor = _load_predictor(self.model_id, self.weights_root)
+        # Optionally perform a tiny warm tensor allocation to force context materialization
+        if cuda_avail and hasattr(self.predictor, 'network'):  # nnUNet predictor has .network
+            try:  # pragma: no cover
+                _ = next(self.predictor.network.parameters()).device
+            except Exception:  # noqa
+                pass
+        if cuda_avail:
+            try:  # pragma: no cover
+                torch.cuda.synchronize()
+                after_mem = torch.cuda.memory_allocated(0)
+            except Exception:  # noqa
+                pass
         self._model_loaded = True
+        self.model_loaded = True
+        self._load_telemetry = {
+            "cuda": cuda_avail,
+            "device_name": device_name,
+            "mem_before": before_mem,
+            "mem_after": after_mem,
+            "mem_delta": (after_mem - before_mem) if (after_mem is not None and before_mem is not None) else None,
+        }
+
+    def ensure_model_loaded(self):
+        if not self.model_loaded:
+            self.load_model()
+        return self.model_loaded
 
     # Request format: {"inputs": {"image_path": str}}
     def predict(self, request: Dict[str, Any]):

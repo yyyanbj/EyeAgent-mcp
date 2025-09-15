@@ -36,14 +36,120 @@ Specify one or more tool roots explicitly (repeat flag) using the new `--tools-d
 uv run eyetools-mcp serve --host 0.0.0.0 --port 8000 --tools-dir tools --tools-dir extra_tools
 ```
 
-Preload (instantiate + load models) to reduce first-request latency (may consume GPU memory immediately):
+### Lifecycle Modes (NEW)
+You can now choose a lifecycle strategy controlling when models are instantiated / loaded and when they are unloaded:
+
+| Mode | Description |
+|------|-------------|
+| `eager` (default) | Discover & preload all tools at startup (always includes subprocess tools). Fastest first inference; highest initial memory usage. |
+| `lazy` | Discover tools only; instantiate/load on first request. Lower startup memory; first-call latency higher. |
+| `dynamic` | Same as `lazy`, plus an automatic background maintenance loop that marks tools idle / unloads them after configurable inactivity. |
+
+Flags:
 ```bash
-uv run eyetools-mcp serve --preload --tools-dir tools
+--lifecycle-mode {eager|lazy|dynamic}
+--dynamic-mark-idle-s <seconds>   # inactivity to mark IDLE (dynamic mode)
+--dynamic-unload-s <seconds>      # inactivity to unload after being IDLE
+--dynamic-interval-s <seconds>    # background sweep interval
 ```
-Also preload subprocess tools (if any configured):
+
+Examples:
 ```bash
-uv run eyetools-mcp serve --preload --preload-subprocess
+# 1. Eager (all models into RAM/VRAM) – default
+uv run eyetools-mcp serve --lifecycle-mode eager
+
+# 2. Lazy (on-demand loading)
+uv run eyetools-mcp serve --lifecycle-mode lazy
+
+# 3. Dynamic (auto idle/unload after 10m idle; unload after 30m)
+uv run eyetools-mcp serve --lifecycle-mode dynamic \
+	--dynamic-mark-idle-s 600 --dynamic-unload-s 1800 --dynamic-interval-s 60
 ```
+
+Legacy preload flags (still supported):
+```bash
+--preload                # preload all inproc tools
+--preload-subprocess     # also preload subprocess workers
+```
+Precedence: if `--lifecycle-mode` is specified it takes priority; legacy `--preload` flags are ignored under `eager` because eager always preloads everything (including subprocess). If you omit `--lifecycle-mode`, using `--preload` reproduces the previous startup behavior.
+
+Eager & subprocess notes:
+* Subprocess tools spawn worker processes during eager preload.
+* The worker will attempt an explicit `LOAD_MODEL` command (if the tool supports `load_model`). If it fails (e.g., weights missing) the tool remains lazily loaded; the first prediction will then trigger loading.
+* Check `/admin/config` to see active lifecycle configuration.
+
+### Logging
+Default log level is now `DEBUG` (can be noisy). Override with environment variable:
+```bash
+export EYETOOLS_LOG_LEVEL=INFO   # or WARNING / ERROR
+```
+All logs share the prefix `[eyetools.core]` or similar logger names.
+To also persist logs to a file, use the CLI flag:
+```bash
+uv run eyetools-mcp serve --log-dir logs
+```
+This creates (or appends) `logs/eyetools.log`. Equivalent environment-based setup:
+```bash
+export EYETOOLS_LOG_DIR=logs
+uv run eyetools-mcp serve
+```
+
+### Management & Introspection Endpoints
+The server exposes a lightweight operational surface (all JSON):
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/health` | GET | Basic status (count of discovered tools) |
+| `/tools` | GET | List tools (optionally filtered by role) |
+| `/predict` | POST | Run inference `{tool_id, request, role?}` |
+| `/metrics` | GET | Aggregated metrics; add `?tool_id=<id>` for single tool |
+| `/lifecycle` | GET | Lifecycle states; add `?detailed=true` for `last_used` + loaded flag |
+| `/admin/reload` | POST | Rediscover tools; `?preload_models=true` to eagerly (re)load |
+| `/admin/preload/{tool_id}` | POST | Preload a single tool: inproc => instantiate (+lazy model); subprocess => spawn worker |
+| `/admin/evict?tool_id=<id>` | POST | Unload an inproc tool or terminate subprocess worker |
+| `/admin/resources` | GET | Resource snapshot: counts, memory RSS, optional GPU, metrics aggregate |
+| `/admin/maintenance` | POST | Run maintenance (query: mark_idle_s, unload_idle_s) |
+
+Example single-tool preload:
+```bash
+curl -X POST http://localhost:8000/admin/preload/classification:modality
+```
+
+Evict a tool to reclaim RAM/VRAM:
+```bash
+curl -X POST 'http://localhost:8000/admin/evict?tool_id=classification:modality'
+```
+
+Fetch metrics for just one tool:
+```bash
+curl 'http://localhost:8000/metrics?tool_id=classification:modality'
+```
+
+Resource snapshot (memory & counts):
+```bash
+curl http://localhost:8000/admin/resources
+```
+
+Mark tools idle (>5s since last use) then unload those idle >10s (two-step or combined calls):
+```bash
+curl -X POST 'http://localhost:8000/admin/maintenance?mark_idle_s=5'
+curl -X POST 'http://localhost:8000/admin/maintenance?unload_idle_s=10'
+```
+
+Combined (only unload threshold):
+```bash
+curl -X POST 'http://localhost:8000/admin/maintenance?unload_idle_s=600'
+```
+
+Detailed lifecycle snapshot (includes `last_used` timestamps):
+```bash
+curl 'http://localhost:8000/lifecycle?detailed=true'
+```
+
+Notes:
+* Subprocess (segmentation) tools are now supported by `/admin/preload/{tool_id}` (spawns worker; model remains lazy if implemented that way).
+* `evict` now supports terminating subprocess workers as well.
+* Idle/unload automation hooks (`mark_idle`, `unload_idle`) exist internally and can be wired to a background task later.
 
 ### Segmentation Environment (Optional Heavy)
 Segmentation variants use a dedicated environment `py312-seg` (see `envs/py312-seg/pyproject.toml`). You can warm it up:
