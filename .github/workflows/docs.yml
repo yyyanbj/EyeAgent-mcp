@@ -47,16 +47,16 @@ jobs:
           echo '---' > mkdocs.generated.yml
           # Merge site config with generated nav (simple replacement of nav block)
           python - <<'PY'
-import yaml, re, pathlib
-orig = pathlib.Path('mkdocs.yml').read_text()
-# Remove existing nav section (naive regex for demonstration)
-orig_no_nav = re.sub(r'(?ms)^nav:\n.*?(?=^\w|\Z)', '', orig)
-gen = yaml.safe_load(pathlib.Path('nav.generated.yml').read_text())
-data = yaml.safe_load(orig_no_nav)
-data['nav'] = gen
-path = pathlib.Path('mkdocs.generated.yml')
-path.write_text(yaml.safe_dump(data, sort_keys=False, allow_unicode=True))
-print('[nav] generated mkdocs.generated.yml')
+          import yaml, re, pathlib
+          orig = pathlib.Path('mkdocs.yml').read_text()
+          # Remove existing nav section (naive regex for demonstration)
+          orig_no_nav = re.sub(r'(?ms)^nav:\n.*?(?=^\w|\Z)', '', orig)
+          gen = yaml.safe_load(pathlib.Path('nav.generated.yml').read_text())
+          data = yaml.safe_load(orig_no_nav)
+          data['nav'] = gen
+          path = pathlib.Path('mkdocs.generated.yml')
+          path.write_text(yaml.safe_dump(data, sort_keys=False, allow_unicode=True))
+          print('[nav] generated mkdocs.generated.yml')
 PY
 
       - name: Build site
