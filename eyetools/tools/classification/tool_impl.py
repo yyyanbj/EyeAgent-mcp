@@ -5,8 +5,18 @@ from typing import Any, Dict, Optional
 import torch, torch.nn as nn
 from torchvision import transforms
 from PIL import Image
-from .class_lists import TASK_CLASS_MAP, MULTIDIS_SIGNS, DEFAULT_SHOW_N
-from .model_factory import create_model
+
+# Support execution when the classification directory is added directly to sys.path
+try:  # normal package relative imports
+    from .class_lists import TASK_CLASS_MAP, MULTIDIS_SIGNS, DEFAULT_SHOW_N  # type: ignore
+    from .model_factory import create_model  # type: ignore
+except Exception:  # noqa
+    # Fallback to absolute module names if user appended root dir of tool to sys.path
+    try:
+        from class_lists import TASK_CLASS_MAP, MULTIDIS_SIGNS, DEFAULT_SHOW_N  # type: ignore
+        from model_factory import create_model  # type: ignore
+    except Exception as e:  # pragma: no cover
+        raise ImportError(f"Failed to import classification dependencies: {e}")
 
 @dataclass
 class ToolVariantMeta:

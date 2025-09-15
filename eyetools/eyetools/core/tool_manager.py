@@ -44,6 +44,19 @@ class ToolManager:
             if str(root) not in sys.path:
                 sys.path.insert(0, str(root))
             mod = import_module(module_name)
+        if not hasattr(mod, class_name):
+            # Fallback: load by explicit file path (avoid name collision like multiple tool_impl.py on sys.path)
+            candidate = Path(meta.root_dir) / f"{module_name}.py"
+            if candidate.exists():
+                import importlib.util as _ilu
+                safe_name = f"eyetools_dyn_{meta.id.replace(':','_').replace('-','_')}"
+                spec = _ilu.spec_from_file_location(safe_name, str(candidate))
+                if spec and spec.loader:
+                    dyn_mod = _ilu.module_from_spec(spec)
+                    sys.modules[safe_name] = dyn_mod
+                    spec.loader.exec_module(dyn_mod)  # type: ignore
+                    if hasattr(dyn_mod, class_name):
+                        return getattr(dyn_mod, class_name)
         return getattr(mod, class_name)
 
     def get_or_create_inproc(self, meta: ToolMeta):
@@ -170,5 +183,37 @@ class ToolManager:
         all_metrics = {tid: data.copy() for tid, data in self._metrics.items()}
         all_metrics["__aggregate__"] = aggregate
         return all_metrics
+
+    # ------------------------------------------------------------------
+    def preload_all(self, include_subprocess: bool = False):
+        """Instantiate all tools and (if lazy) load their models.
+
+        include_subprocess: if True also spin up subprocess tools (may be expensive).
+        Exceptions during individual tool preload are logged and skipped so one
+        broken tool doesn't block server startup.
+        """
+        from .logging import core_logger as _logger
+        count = 0
+        for meta in self.registry.list():
+            mode = meta.runtime.get("load_mode", "auto")
+            if mode == "subprocess" and not include_subprocess:
+                _logger.info("[preload] skip subprocess tool_id=%s (include_subprocess=False)", meta.id)
+                continue
+            try:
+                inst = self.get_or_create_inproc(meta) if mode in ("auto", "inproc") else None
+                if inst and meta.model.get("lazy", True) and hasattr(inst, "ensure_model_loaded"):
+                    inst.ensure_model_loaded()
+                # Optional warmup request
+                warm = meta.warmup.get("request") if hasattr(meta, "warmup") else None
+                if warm and inst:
+                    try:
+                        inst.predict(warm)
+                    except Exception:  # pragma: no cover
+                        _logger.exception("[preload] warmup failed tool_id=%s", meta.id)
+                count += 1
+            except Exception as e:  # noqa
+                _logger.exception("[preload] failed tool_id=%s error=%s", meta.id, e)
+        _logger.info("[preload] completed count=%d", count)
+        return count
 
 __all__ = ["ToolManager"]

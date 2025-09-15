@@ -26,10 +26,23 @@ source .venv/bin/activate
 uv sync  # install base deps
 ```
 
-Run the MCP server (auto-discovers tools):
+Run the MCP server (auto-discovers tools). If you omit an explicit path and a local `./tools` directory exists, it will be used automatically.
 
 ```bash
-uv run eyetools-mcp serve --tools-dir tools --host 0.0.0.0 --port 8000
+uv run eyetools-mcp serve --host 0.0.0.0 --port 8000
+```
+Specify one or more tool roots explicitly (repeat flag) using the new `--tools-dir` alias (or legacy `--tool-path`):
+```bash
+uv run eyetools-mcp serve --host 0.0.0.0 --port 8000 --tools-dir tools --tools-dir extra_tools
+```
+
+Preload (instantiate + load models) to reduce first-request latency (may consume GPU memory immediately):
+```bash
+uv run eyetools-mcp serve --preload --tools-dir tools
+```
+Also preload subprocess tools (if any configured):
+```bash
+uv run eyetools-mcp serve --preload --preload-subprocess
 ```
 
 ### Segmentation Environment (Optional Heavy)

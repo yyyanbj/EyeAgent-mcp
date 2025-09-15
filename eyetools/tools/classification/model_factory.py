@@ -3,9 +3,6 @@ import os, glob
 from typing import Tuple, List
 import torch, torch.nn as nn
 
-from .models.resnet_csra import ResNet_CSRA
-from .models.cfp_age_model import CfpAgeModel
-
 # Mapping task -> weights folder name
 FOLDER_MAP = {
     "modality": "modality23_resnet101_224_12-28-1602",
@@ -45,10 +42,24 @@ def _load_state(model: nn.Module, ckpt_path: str | None):
 
 def _build_model(task: str, num_classes: int) -> nn.Module:
     if task == "cfp_age":
+        # Lazy import to avoid requiring timm unless age task is used
+        try:
+            try:
+                from .models.cfp_age_model import CfpAgeModel  # type: ignore
+            except Exception:  # noqa
+                from models.cfp_age_model import CfpAgeModel  # type: ignore
+        except Exception as e:  # pragma: no cover
+            raise ImportError(f"cfp_age model unavailable (timm installed?): {e}")
         return CfpAgeModel(pretrained=False)
     # Multi-label (multidis) & multi-class tasks share CSRA backbone; for binary laterality still use num_classes
-    depth = 101  # fixed based on weight naming
-    # For CSRA we treat all classification tasks as multi-label logits; tool_impl decides activation
+    depth = 101
+    try:
+        try:
+            from .models.resnet_csra import ResNet_CSRA  # type: ignore
+        except Exception:  # noqa
+            from models.resnet_csra import ResNet_CSRA  # type: ignore
+    except Exception as e:  # pragma: no cover
+        raise ImportError(f"CSRA backbone import failed: {e}")
     return ResNet_CSRA(num_heads=2, lam=0.1, num_classes=num_classes, depth=depth)
 
 

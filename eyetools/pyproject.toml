@@ -20,6 +20,7 @@ dependencies = [
     "matplotlib>=3.10.6",
     "fire>=0.6.0",
     "packaging>=21.0",
+    "timm>=1.0.19",
 ]
 
 [project.optional-dependencies]
