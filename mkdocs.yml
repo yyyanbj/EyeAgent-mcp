@@ -1,0 +1,36 @@
+site_name: Eye Platform Docs
+site_description: EyeAgent & EyeTools Unified Documentation
+repo_url: https://github.com/beiyuouo/EyeAgent-mcp
+repo_name: EyeAgent-mcp
+docs_dir: _docs_build
+use_directory_urls: true
+nav:
+  - Home: index.md
+  - EyeAgent:
+    - Overview: eyeagent/index.md
+    - Quick Start: eyeagent/quickstart.md
+    - Architecture: eyeagent/architecture.md
+  - EyeTools:
+    - Overview: eyetools/index.md
+    - Quick Start: eyetools/quickstart.md
+    - Architecture: eyetools/architecture.md
+plugins:
+  - search
+markdown_extensions:
+  - toc:
+      permalink: true
+  - admonition
+  - tables
+  - fenced_code
+
+# 可选：如果未来使用 material 主题，只需取消注释并安装 mkdocs-material
+# theme:
+#   name: material
+#   language: zh
+#   features:
+#     - navigation.instant
+#     - navigation.tracking
+#     - search.suggest
+#     - search.highlight
+
+# 先使用内置主题，保持零依赖
