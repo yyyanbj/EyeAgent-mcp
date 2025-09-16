@@ -1,0 +1,136 @@
+package: disease_specific_cls
+entry: tool_impl:DiseaseSpecificClassificationTool
+category: vision
+shared:
+  environment_ref: py311-retfound
+  runtime:
+    load_mode: auto  # changed from 'lazy' (invalid) to valid load mode
+    idle_timeout_s: 900
+    device_policy: auto
+    preload: false
+  io:
+    input_schema:
+      image_path: path
+    output_schema:
+      probability: float
+      predicted: bool
+  model_defaults:
+    precision: auto
+    lazy: true
+    threshold: 0.5
+variants:
+  # Auto-generated list of disease-specific weight folders (finetune & lp)
+  # Each variant maps directly to a folder in weights/disease-specific/<variant>
+  - variant: AH_finetune
+    version: 0.1.0
+    params: { variant: AH_finetune }
+  - variant: AION_finetune
+    version: 0.1.0
+    params: { variant: AION_finetune }
+  - variant: AMD_finetune
+    version: 0.1.0
+    params: { variant: AMD_finetune }
+  - variant: CM_finetune
+    version: 0.1.0
+    params: { variant: CM_finetune }
+  - variant: CNV_finetune
+    version: 0.1.0
+    params: { variant: CNV_finetune }
+  - variant: CSCR_finetune
+    version: 0.1.0
+    params: { variant: CSCR_finetune }
+  - variant: Coats_finetune
+    version: 0.1.0
+    params: { variant: Coats_finetune }
+  - variant: DR_finetune
+    version: 0.1.0
+    params: { variant: DR_finetune }
+  - variant: ERM_finetune
+    version: 0.1.0
+    params: { variant: ERM_finetune }
+  - variant: HR_finetune
+    version: 0.1.0
+    params: { variant: HR_finetune }
+  - variant: MGS_finetune
+    version: 0.1.0
+    params: { variant: MGS_finetune }
+  - variant: MH_finetune
+    version: 0.1.0
+    params: { variant: MH_finetune }
+  - variant: PCV_finetune
+    version: 0.1.0
+    params: { variant: PCV_finetune }
+  - variant: RAO_finetune
+    version: 0.1.0
+    params: { variant: RAO_finetune }
+  - variant: RD_finetune
+    version: 0.1.0
+    params: { variant: RD_finetune }
+  - variant: ROP_finetune
+    version: 0.1.0
+    params: { variant: ROP_finetune }
+  - variant: RP_finetune
+    version: 0.1.0
+    params: { variant: RP_finetune }
+  - variant: RVO_finetune
+    version: 0.1.0
+    params: { variant: RVO_finetune }
+  - variant: VHL_finetune
+    version: 0.1.0
+    params: { variant: VHL_finetune }
+  - variant: VKH_finetune
+    version: 0.1.0
+    params: { variant: VKH_finetune }
+  - variant: WDS_finetune
+    version: 0.1.0
+    params: { variant: WDS_finetune }
+  - variant: corneal_ulcer_finetune
+    version: 0.1.0
+    params: { variant: corneal_ulcer_finetune }
+  - variant: epiphora_finetune
+    version: 0.1.0
+    params: { variant: epiphora_finetune }
+  - variant: glaucoma_finetune
+    version: 0.1.0
+    params: { variant: glaucoma_finetune }
+  - variant: keratoconus_finetune
+    version: 0.1.0
+    params: { variant: keratoconus_finetune }
+  - variant: macular_dystrophy_finetune
+    version: 0.1.0
+    params: { variant: macular_dystrophy_finetune }
+  - variant: metaPM_finetune
+    version: 0.1.0
+    params: { variant: metaPM_finetune }
+  - variant: nuclear_cataract_1_finetune
+    version: 0.1.0
+    params: { variant: nuclear_cataract_1_finetune }
+  - variant: nuclear_cataract_2_finetune
+    version: 0.1.0
+    params: { variant: nuclear_cataract_2_finetune }
+  - variant: nuclear_cataract_3_finetune
+    version: 0.1.0
+    params: { variant: nuclear_cataract_3_finetune }
+  - variant: nuclear_cataract_4_finetune
+    version: 0.1.0
+    params: { variant: nuclear_cataract_4_finetune }
+  - variant: nuclear_cataract_finetune
+    version: 0.1.0
+    params: { variant: nuclear_cataract_finetune }
+  - variant: opaque_cornea_finetune
+    version: 0.1.0
+    params: { variant: opaque_cornea_finetune }
+  - variant: retinoschisis_finetune
+    version: 0.1.0
+    params: { variant: retinoschisis_finetune }
+  - variant: toxoplasmosis_finetune
+    version: 0.1.0
+    params: { variant: toxoplasmosis_finetune }
+  - variant: viral_retinitis_finetune
+    version: 0.1.0
+    params: { variant: viral_retinitis_finetune }
+metadata:
+  authors: ["EyeAgent Team"]
+  license: Apache-2.0
+notes:
+  - 0.1.0 disease-specific classification package (RETFound Dinov3)
