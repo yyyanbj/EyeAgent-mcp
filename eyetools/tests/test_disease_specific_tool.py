@@ -14,7 +14,7 @@ def test_disease_specific_tool_missing_weights_graceful(monkeypatch):
     """
     # dynamic import path
     import importlib
-    mod = importlib.import_module("eyetools.tools.disease_specific_cls.tool_impl")
+    mod = importlib.import_module("tools.disease_specific_cls.tool_impl")
     ToolCls = getattr(mod, "DiseaseSpecificClassificationTool")
     meta = {"variant": "FAKE_finetune"}
     params = {"variant": "FAKE_finetune", "allow_missing": True, "skip_hub": True}
@@ -38,7 +38,7 @@ def test_label_file_parsing(tmp_path, monkeypatch):
     weights_root.mkdir(parents=True)
     (weights_root / "label.txt").write_text("2\nFAKEDIS\nnormal\n", encoding="utf-8")
     import importlib
-    mod = importlib.import_module("eyetools.tools.disease_specific_cls.tool_impl")
+    mod = importlib.import_module("tools.disease_specific_cls.tool_impl")
     ToolCls = getattr(mod, "DiseaseSpecificClassificationTool")
     meta = {"variant": "FAKEDIS_finetune"}
     params = {"variant": "FAKEDIS_finetune", "allow_missing": True, "skip_hub": True, "weights_root": str(weights_root.parent.parent)}
@@ -54,7 +54,7 @@ def test_label_file_comma_index_format(tmp_path, monkeypatch):
     weights_root.mkdir(parents=True)
     (weights_root / "label.txt").write_text("dry amd,0\nwet amd,1\nno amd,2\n", encoding="utf-8")
     import importlib
-    mod = importlib.import_module("eyetools.tools.disease_specific_cls.tool_impl")
+    mod = importlib.import_module("tools.disease_specific_cls.tool_impl")
     ToolCls = getattr(mod, "DiseaseSpecificClassificationTool")
     meta = {"variant": "ANOTHER_finetune"}
     params = {"variant": "ANOTHER_finetune", "allow_missing": True, "skip_hub": True, "weights_root": str(weights_root.parent.parent)}

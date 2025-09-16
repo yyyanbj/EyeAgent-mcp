@@ -17,7 +17,7 @@ upstream RETFound README) which includes `torch==2.5.1`, `torchvision==0.20.1`,
 
 ## Usage (Programmatic)
 ```python
-from eyetools.tools.disease_specific_cls.tool_impl import load_tool
+from tools.disease_specific_cls.tool_impl import load_tool
 tool = load_tool("AMD_finetune")  # loads weights/disease-specific/AMD_finetune/checkpoint-best.pth
 out = tool.predict({"image_path": "examples/test_images/AMD.jpg"})
 print(out)
