@@ -416,6 +416,7 @@ def create_app(
                 return {"enabled": False, "tools": [], "tool_names": []}
             names: list[str] = []
             detailed: List[Dict[str, Any]] = []
+            lifecycle_map = tm.lifecycle_states()
             try:
                 maybe = getattr(inst, "_tools", None) or getattr(inst, "tools", None)
                 # fastmcp stores tools as name->FastMCPTool (with attributes .name, .description, .input_schema)
@@ -433,6 +434,7 @@ def create_app(
                             "description": desc,
                             "input_schema": schema,
                             "param_style": style_map.get(k, "unknown"),
+                            "lifecycle_state": lifecycle_map.get(k),
                         })
                 names = sorted(names)
                 detailed = sorted(detailed, key=lambda x: x["name"])
@@ -445,6 +447,15 @@ def create_app(
                 "tools": detailed,
                 "count": len(names),
             }
+
+        @app.post("/mcp/refresh")  # pragma: no cover - light endpoint
+        def mcp_refresh():
+            rer = getattr(app.state, "_mcp_reregister", None)
+            if not rer:
+                raise HTTPException(status_code=400, detail="MCP not enabled")
+            rer()
+            tools_after = getattr(app.state, "_mcp_param_styles", {})
+            return {"status": "ok", "count": len(tools_after), "tools": sorted(tools_after.keys())}
 
     # Lifecycle mode handling precedence:
     # 1. lifecycle_mode if provided (eager|lazy|dynamic)
