@@ -90,13 +90,18 @@ class ToolManager:
     def _import_entry(self, meta: ToolMeta):
         entry = meta.entry
         module_name, class_name = entry.split(":", 1)
+        # Always ensure tool root dir precedes import to stabilize relative imports
+        root = Path(meta.root_dir)
+        # Insert just before existing workspace root paths to keep deterministic order
+        if str(root) not in sys.path:
+            # place early but after cwd to avoid shadowing top-level packages
+            insertion_index = 1 if sys.path and sys.path[0] == '' else 0
+            sys.path.insert(insertion_index, str(root))
         try:
             mod = import_module(module_name)
         except ModuleNotFoundError:
-            # attempt to add tool root_dir to sys.path and retry
-            root = Path(meta.root_dir)
-            if str(root) not in sys.path:
-                sys.path.insert(0, str(root))
+            # fallback: if module name is a simple file (e.g., tool_impl) load via spec directly later
+            # This branch keeps previous behavior but root already inserted.
             mod = import_module(module_name)
         if not hasattr(mod, class_name):
             # Fallback: load by explicit file path (avoid name collision like multiple tool_impl.py on sys.path)

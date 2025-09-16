@@ -28,6 +28,8 @@ Assumptions:
 import os
 import time
 import logging
+import inspect
+import argparse
 from typing import Any, Dict, Union, List
 
 import torch
@@ -97,6 +99,9 @@ class DiseaseSpecificClassificationTool:
         self.ckpt_path = os.path.join(self.weights_root, self.variant, "checkpoint-best.pth")
         self.allow_missing = bool(params.get("allow_missing", True))
         self.skip_hub = bool(params.get("skip_hub", False))
+        # Security toggle: allow unsafe pickle execution path if needed.
+        # Only set this True if you fully trust the checkpoint source.
+        self.allow_unsafe_checkpoint = bool(params.get("allow_unsafe_checkpoint", False))
         # only raise if strictly required
         if not os.path.isfile(self.ckpt_path) and not self.allow_missing:
             raise FileNotFoundError(f"Checkpoint not found: {self.ckpt_path}")
@@ -150,7 +155,7 @@ class DiseaseSpecificClassificationTool:
                     explicit_labels = lines
             except Exception:  # pragma: no cover
                 explicit_labels = None
-        state = torch.load(self.ckpt_path, map_location="cpu")
+        state = self._load_checkpoint_multi_strategy(self.ckpt_path)
         # Accept typical wrappers
         if isinstance(state, dict) and "model" in state:
             model_state = state.get("model") or state
@@ -195,6 +200,71 @@ class DiseaseSpecificClassificationTool:
                 self.classes = [f"cls_{i}" for i in range(num_classes)]
         self.model.to(self.device).eval()
         self._loaded = True
+
+    # ------------------------------------------------------------------
+    # Robust checkpoint loading (handles PyTorch 2.6+ weights_only=True default)
+    # ------------------------------------------------------------------
+    def _torch_load_supports(self, param: str) -> bool:
+        try:
+            sig = inspect.signature(torch.load)
+            return param in sig.parameters
+        except Exception:  # pragma: no cover
+            return False
+
+    def _attempt_torch_load(self, path: str, *, weights_only: bool | None) -> Any:
+        kwargs = {"map_location": "cpu"}
+        if weights_only is not None and self._torch_load_supports("weights_only"):
+            kwargs["weights_only"] = weights_only
+        try:
+            return torch.load(path, **kwargs)  # type: ignore[arg-type]
+        except Exception as e:  # noqa: BLE001
+            raise e
+
+    def _load_checkpoint_multi_strategy(self, path: str) -> Any:
+        """Attempt secure-first loading with fallbacks.
+
+        Strategy order:
+          1. Try default (which on PyTorch>=2.6 is weights_only=True).
+          2. If fails with unsupported global referring to argparse.Namespace, add it to safe globals and retry weights_only=True.
+          3. If still fails AND user explicitly allows unsafe, retry with weights_only=False (pickle execution risk) and log warning.
+        """
+        # Step 1: initial attempt
+        try:
+            return self._attempt_torch_load(path, weights_only=None)  # defer to framework default
+        except Exception as e1:  # noqa: BLE001
+            msg = str(e1)
+            insecure_needed = "Weights only load failed" in msg or "Unsupported global" in msg
+            if not insecure_needed:
+                # unrelated error; propagate
+                raise
+            # Step 2: add safe globals for argparse.Namespace if mentioned
+            try:
+                if "argparse.Namespace" in msg:
+                    try:
+                        from torch.serialization import add_safe_globals  # type: ignore
+                        add_safe_globals([argparse.Namespace])  # type: ignore[arg-type]
+                    except Exception:  # pragma: no cover
+                        pass
+                # retry with explicit weights_only=True if supported
+                return self._attempt_torch_load(path, weights_only=True)
+            except Exception as e2:  # noqa: BLE001
+                # Step 3: optional unsafe fallback
+                if self.allow_unsafe_checkpoint:
+                    logger.warning(
+                        "Unsafe checkpoint load fallback engaged (weights_only=False) for %s due to: %s. Ensure you trust this file.",
+                        path, e2,
+                    )
+                    try:
+                        return self._attempt_torch_load(path, weights_only=False)
+                    except Exception as e3:  # noqa: BLE001
+                        raise RuntimeError(
+                            f"Failed to load checkpoint with unsafe fallback as well: {e3}"  # noqa: EM101
+                        ) from e3
+                # Not allowed to perform unsafe load; re-raise original secure error with guidance
+                raise RuntimeError(
+                    "Secure checkpoint load failed and unsafe fallback disabled. "
+                    "Set allow_unsafe_checkpoint=True ONLY if you trust the source. Original error: " + msg
+                ) from e2
 
     def _load_image(self, path: str):
         img = Image.open(path).convert("RGB")
