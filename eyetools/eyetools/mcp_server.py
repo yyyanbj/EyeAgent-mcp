@@ -9,7 +9,7 @@ CLI will import this module and call create_app().
 from __future__ import annotations
 from fastapi import FastAPI, HTTPException, Query
 from pydantic import BaseModel
-from typing import List, Optional, Any, Dict
+from typing import List, Optional, Any, Dict, Callable
 import os, json
 from pathlib import Path
 
@@ -18,6 +18,12 @@ from .core.loader import discover_tools
 from .core.tool_manager import ToolManager
 from .core.role_router import RoleRouter
 from .core.logging import core_logger
+
+# Optional fastmcp import. We keep it optional so existing users without MCP needs are not blocked.
+try:  # pragma: no cover - import side effect
+    from fastmcp import FastMCP  # type: ignore
+except Exception:  # noqa
+    FastMCP = None  # type: ignore
 
 
 class PredictRequest(BaseModel):
@@ -73,7 +79,19 @@ def create_app(
     dynamic_interval_s: float = 60.0,
     parallel_subprocess: bool = False,
     parallel_subprocess_workers: int = 4,
+    enable_mcp: bool = True,
+    # Revert default back to root for backward compatibility; can override via param or EYETOOLS_MCP_MOUNT_PATH env.
+    mcp_mount_path: str = "/",
 ):
+    # Allow environment variable to override mount path regardless of default/argument
+    mount_env = os.getenv("EYETOOLS_MCP_MOUNT_PATH")
+    if mount_env:
+        if not mount_env.startswith("/"):
+            mount_env = "/" + mount_env
+        mcp_mount_path = mount_env
+    # Normalize trailing slash (except keep root as '/')
+    if mcp_mount_path != "/" and mcp_mount_path.endswith("/"):
+        mcp_mount_path = mcp_mount_path[:-1]
     registry = ToolRegistry()
     # Two env vars supported for flexibility: legacy EYETOOLS_TOOL_PATHS and new EYETOOLS_EXTRA_TOOL_PATHS
     extra_paths_env = os.getenv("EYETOOLS_TOOL_PATHS", "")
@@ -109,6 +127,177 @@ def create_app(
     role_router = RoleRouter(_load_role_config(role_config_path))
 
     app = FastAPI(title="eyetools-mcp", version="0.1.0")
+
+    # ---- MCP Integration (refactored) ----------------------------------------
+    def _setup_mcp():
+        if not enable_mcp:
+            return None
+        if FastMCP is None:  # pragma: no cover - optional path
+            core_logger.warning("[MCP] fastmcp not installed; skipping MCP endpoints")
+            return None
+        try:
+            mcp_instance = FastMCP()
+        except Exception as e:  # noqa
+            core_logger.exception(f"[MCP] init failed: {e}")
+            return None
+
+        prefer_explicit = os.getenv("EYETOOLS_MCP_PREFER_EXPLICIT", "1") != "0"
+        param_styles: Dict[str, str] = {}
+
+        def build_input_schema(meta) -> Dict[str, Any]:
+            if isinstance(meta.io, dict):
+                if isinstance(meta.io.get("input"), dict):
+                    return meta.io["input"]
+                props = {k: {"type": "string"} for k in meta.io.keys() if k not in {"batchable", "input"}}
+                if props:
+                    return {"type": "object", "properties": props, "additionalProperties": True}
+            return {"type": "object", "properties": {}, "additionalProperties": True}
+
+        def extract_param_names(input_schema: Dict[str, Any], meta) -> List[str]:
+            names: List[str] = []
+            if input_schema.get("type") == "object":
+                props = input_schema.get("properties", {})
+                if isinstance(props, dict):
+                    names.extend(props.keys())
+            if not names and isinstance(meta.io, dict):
+                for k in meta.io.keys():
+                    if k not in {"batchable", "input"}:
+                        names.append(k)
+            return list(dict.fromkeys(names))  # de-dup preserve order
+
+        def register_single(meta):  # noqa: C901 complexity acceptable here
+            tool_id = meta.id
+            input_schema = build_input_schema(meta)
+            # Attempt explicit signature
+            def make_explicit():
+                params = extract_param_names(input_schema, meta)
+                if not params:
+                    raise ValueError("no_params")
+                import re
+                mapping = {}
+                used = set()
+                san_list = []
+                for p in params:
+                    san = re.sub(r"[^0-9a-zA-Z_]+", "_", p) or "p"
+                    if san[0].isdigit():
+                        san = "p_" + san
+                    base = san; i = 1
+                    while san in used:
+                        san = f"{base}_{i}"; i += 1
+                    used.add(san)
+                    mapping[san] = p
+                    san_list.append(san)
+                sig_params = ", ".join(f"{s}: Any = None" for s in san_list)
+                body = [
+                    "    try:",
+                    "        _locals = {k: v for k, v in locals().items() if k not in {'tid','tm','_map'}}",
+                    "        inputs = {}",
+                    "        for _san,_orig in _map.items():",
+                    "            val = _locals.get(_san)",
+                    "            if val is not None: inputs[_orig] = val",
+                    "        return tm.predict(tid, {'inputs': inputs} if inputs else {})",
+                    "    except Exception as e:",
+                    "        return {'error': str(e)}",
+                ]
+                src = f"async def _f({sig_params}):\n" + "\n".join(body)
+                glb = {"tm": tm, "tid": tool_id, "Any": Any, "_map": mapping}
+                loc: Dict[str, Any] = {}
+                exec(src, glb, loc)  # noqa
+                fn = loc["_f"]
+                fn.__name__ = f"tool_{tool_id.replace(':','_')}_explicit"
+                fn.__doc__ = f"MCP wrapper explicit params for '{tool_id}' params={params}"
+                return fn
+
+            async def func_kwargs(**kwargs):  # type: ignore
+                try:
+                    return tm.predict(tool_id, {"inputs": kwargs} if kwargs else {})
+                except Exception as e:  # noqa
+                    return {"error": str(e)}
+            func_kwargs.__name__ = f"tool_{tool_id.replace(':','_')}"
+            func_kwargs.__doc__ = f"MCP wrapper for eyetools tool '{tool_id}' (kwargs)"
+
+            async def func_payload(payload: Dict[str, Any] | None = None):  # type: ignore
+                try:
+                    return tm.predict(tool_id, {"inputs": (payload or {})} if payload else {})
+                except Exception as e:  # noqa
+                    return {"error": str(e)}
+            func_payload.__name__ = f"tool_{tool_id.replace(':','_')}_payload"
+            func_payload.__doc__ = f"MCP wrapper for eyetools tool '{tool_id}' (payload)"
+
+            # Decorator acquisition (handles input_schema support variance)
+            try:
+                try:
+                    deco = mcp_instance.tool(name=tool_id, description=tool_id, input_schema=input_schema)  # type: ignore
+                except TypeError as te:
+                    if 'input_schema' in str(te):
+                        deco = mcp_instance.tool(name=tool_id, description=tool_id)  # type: ignore
+                        core_logger.debug("[MCP] no input_schema support (tool=%s)", tool_id)
+                    else:
+                        raise
+                # explicit -> kwargs -> payload fallback
+                if prefer_explicit:
+                    try:
+                        explicit_fn = make_explicit()
+                        deco(explicit_fn)
+                        param_styles[tool_id] = "explicit"
+                        return
+                    except Exception as e:  # noqa
+                        core_logger.debug("[MCP] explicit build failed tool=%s reason=%s", tool_id, e)
+                try:
+                    deco(func_kwargs)
+                    param_styles[tool_id] = "kwargs"
+                except Exception as e:  # noqa
+                    if "**kwargs" in str(e) or "kwargs" in str(e):
+                        deco2 = mcp_instance.tool(name=tool_id, description=tool_id)  # type: ignore
+                        deco2(func_payload)
+                        param_styles[tool_id] = "payload"
+                        core_logger.info("[MCP] payload fallback tool=%s", tool_id)
+                    else:
+                        raise
+            except Exception as e:  # noqa
+                core_logger.warning("[MCP] failed to register tool id=%s error=%s", tool_id, e)
+
+        for meta in registry.list():
+            register_single(meta)
+
+        # Mount HTTP app
+        try:
+            mcp_app = mcp_instance.http_app(transport="streamable-http")  # type: ignore
+            if mcp_mount_path == "/":
+                for r in mcp_app.routes:
+                    if not any(getattr(er, 'path', None) == r.path for er in app.routes):
+                        app.router.routes.append(r)
+                app.router.lifespan_context = mcp_app.router.lifespan_context  # type: ignore
+                core_logger.info("[MCP] routes merged at root")
+            else:
+                mount_path = mcp_mount_path.rstrip("/") or "/mcp"
+                app.mount(mount_path, mcp_app)
+                core_logger.info("[MCP] mounted at %s", mount_path)
+                if os.getenv("EYETOOLS_MCP_COMPAT_MOUNT") == "1" and mount_path not in {"/mcp", "/"}:
+                    try:
+                        app.mount("/mcp", mcp_app)
+                        core_logger.info("[MCP] compatibility mount /mcp active")
+                    except Exception as ce:  # noqa
+                        core_logger.warning(f"[MCP] compat mount failed: {ce}")
+        except Exception as e:  # noqa
+            core_logger.exception(f"[MCP] attach routes failed: {e}")
+
+        # Final summary log
+        names = sorted(param_styles.keys())
+        core_logger.info("[MCP] available tools (count=%d): %s", len(names), ", ".join(names))
+        app.state.fastmcp = mcp_instance
+        app.state._mcp_param_styles = param_styles  # type: ignore
+
+        def re_register_all():
+            # clear and re-run registration (simple strategy: new instance)
+            core_logger.info("[MCP] re-registering tools after reload...")
+            app.state.fastmcp = None
+            return _setup_mcp()
+
+        app.state._mcp_reregister = re_register_all  # type: ignore
+        return mcp_instance
+
+    _setup_mcp()
 
     @app.get("/health")
     def health():
@@ -155,6 +344,12 @@ def create_app(
                 core_logger.warning(f"reload discover error: {e}")
         if preload_models:
             tm.preload_all()
+        # Re-register MCP tools if integration enabled
+        if enable_mcp and getattr(app.state, "_mcp_reregister", None):  # pragma: no cover
+            try:
+                app.state._mcp_reregister()  # type: ignore
+            except Exception as e:  # noqa
+                core_logger.warning(f"[MCP] MCP re-registration failed: {e}")
         return {"tools": [m.id for m in registry.list()], "errors": [str(e) for e in errors]}
 
     @app.post("/admin/evict")
@@ -211,6 +406,45 @@ def create_app(
             "tool_paths": ctx.get("tool_paths"),
             "include_examples": ctx.get("include_examples"),
         }
+
+    # Debug / introspection endpoint for MCP (lists tool IDs FastMCP has registered)
+    if enable_mcp:
+        @app.get("/mcp/tools")  # pragma: no cover - simple passthrough
+        def mcp_tools():
+            inst = getattr(app.state, "fastmcp", None)
+            if not inst:
+                return {"enabled": False, "tools": [], "tool_names": []}
+            names: list[str] = []
+            detailed: List[Dict[str, Any]] = []
+            try:
+                maybe = getattr(inst, "_tools", None) or getattr(inst, "tools", None)
+                # fastmcp stores tools as name->FastMCPTool (with attributes .name, .description, .input_schema)
+                if isinstance(maybe, dict):
+                    for k, v in maybe.items():
+                        names.append(k)
+                        try:
+                            desc = getattr(v, "description", "")
+                            schema = getattr(v, "input_schema", {})
+                        except Exception:  # noqa
+                            desc, schema = "", {}
+                        style_map: Dict[str, str] = getattr(app.state, "_mcp_param_styles", {})
+                        detailed.append({
+                            "name": k,
+                            "description": desc,
+                            "input_schema": schema,
+                            "param_style": style_map.get(k, "unknown"),
+                        })
+                names = sorted(names)
+                detailed = sorted(detailed, key=lambda x: x["name"])
+            except Exception:  # noqa
+                pass
+            return {
+                "enabled": True,
+                "mount_path": mcp_mount_path,
+                "tool_names": names,
+                "tools": detailed,
+                "count": len(names),
+            }
 
     # Lifecycle mode handling precedence:
     # 1. lifecycle_mode if provided (eager|lazy|dynamic)
