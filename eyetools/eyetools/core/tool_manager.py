@@ -97,6 +97,13 @@ class ToolManager:
             # place early but after cwd to avoid shadowing top-level packages
             insertion_index = 1 if sys.path and sys.path[0] == '' else 0
             sys.path.insert(insertion_index, str(root))
+            core_logger.debug(
+                f"[import] inserted tool root into sys.path index={insertion_index} root={root} module={module_name}"
+            )
+        else:
+            core_logger.debug(
+                f"[import] tool root already in sys.path root={root} module={module_name}"
+            )
         try:
             mod = import_module(module_name)
         except ModuleNotFoundError:
