@@ -1,0 +1,32 @@
+[project]
+name = "eyetools-py311-retfound"
+version = "0.1.0"
+requires-python = ">=3.11,<3.12"
+description = "RETFound (Dinov2/Dinov3/MAE) fine-tune & inference environment on Python 3.11"
+readme = "../../README.md"
+
+# Pinned (or minimally constrained) to align with upstream RETFound README (torch 2.5.x CUDA 12.1 wheel line)
+dependencies = [
+  # Core DL stack (leave unpinned minor for flexibility except torch)
+  "torch==2.5.1",
+  "torchvision==0.20.1",
+  # Vision / modeling
+  "timm>=0.9.2,<0.10.0",
+  # Data & metrics
+  "numpy>=1.26,<2.0",
+  "scikit-learn~=1.4.2",
+  "scikit-multilearn==0.2.0",
+  "pycm~=4.0",
+  # Logging & analysis
+  "tensorboard~=2.17.0",
+  # Imaging & plotting
+  "Pillow>=10.2.0",
+  "opencv-python>=4.9.0.80",
+  "matplotlib>=3.8.4",
+  # HuggingFace access
+  "huggingface-hub>=0.23.4",
+  # Utilities
+  "pyyaml",
+]
+
+[tool.uv]

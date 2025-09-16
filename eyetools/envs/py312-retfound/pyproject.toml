@@ -1,0 +1,23 @@
+[project]
+name = "eyetools-py312-retfound"
+version = "0.1.0"
+requires-python = ">=3.12,<3.13"
+description = "RETFound disease-specific classification environment (Dinov3 ViT-B/16)"
+readme = "../../README.md"
+
+dependencies = [
+  "torch",
+  "torchvision",
+  "pillow",
+  "numpy",
+  "timm",          # vision backbones
+  "scikit-learn",
+  "pycm",
+  "matplotlib",
+  "huggingface-hub",
+  "tensorboard",
+  "scikit-multilearn",
+  "pyyaml",
+]
+
+[tool.uv]

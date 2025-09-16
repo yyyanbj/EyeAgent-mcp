@@ -1,0 +1,16 @@
+[project]
+name = "eyetools-py312"
+version = "0.1.0"
+requires-python = ">=3.12,<3.13"
+description = "Unified Python 3.12 environment for tools"
+
+[project.dependencies]
+torch = "*"
+torchvision = "*"
+Pillow = "*"
+loguru = "*"
+pydantic = "*"
+pyyaml = "*"
+timm = "*"
+
+[tool.uv]

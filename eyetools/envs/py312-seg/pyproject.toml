@@ -1,0 +1,34 @@
+[project]
+name = "eyetools-py312-seg"
+version = "0.1.0"
+requires-python = ">=3.12,<3.13"
+description = "Segmentation environment (py312) with nnUNetv2"
+readme = "../../README.md"
+
+dependencies = [
+  "torch",
+  "torchvision",
+  "pillow",
+  "loguru",
+  "pydantic",
+  "pyyaml",
+  "matplotlib",
+  "numpy",
+  "scipy",
+  "scikit-image",
+  "scikit-learn",
+  "simpleitk",
+  "pandas",
+  "batchgenerators",
+  "acvl-utils",
+  "dynamic-network-architectures",
+  "tifffile",
+  "requests",
+  "nibabel",
+  "seaborn",
+  "imagecodecs",
+  "yacs",
+  "nnunetv2",
+]
+
+[tool.uv]
