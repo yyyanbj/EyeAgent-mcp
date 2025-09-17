@@ -215,3 +215,5 @@ test_images/
 temp/
 
 *.zip
+
+cases/

@@ -4,7 +4,7 @@ import httpx
 from fastmcp import FastMCP, Client
 
 async def main():
-    async with Client("http://localhost:8001/mcp/") as client:
+    async with Client("http://localhost:8000/mcp/") as client:
         # Basic server interaction
         await client.ping()
         
@@ -16,15 +16,14 @@ async def main():
         
 
         resources = await client.list_resources()
-        prompts = await client.list_prompts()
+        print("Available resources:")
+        for r in resources:
+            print("-", r.name, ":", r.description)
 
-        # Example: call a tool
-        # Replace 'calculate' with the name of your tool
-        result = await client.call_tool(
-            name="calculate",
-            arguments={"expression": "2 + 3 * 4"}
-        )
-        print("Result of math_utils.calculate:", result)
+        prompts = await client.list_prompts()
+        print("Available prompts:")
+        for p in prompts:
+            print("-", p.name, ":", p.description)
 
 if __name__ == "__main__":
     asyncio.run(main())

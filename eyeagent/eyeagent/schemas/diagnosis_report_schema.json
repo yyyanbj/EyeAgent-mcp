@@ -1,0 +1,89 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "OphthalmologyDiagnosisReport",
+  "type": "object",
+  "required": ["case_id", "patient", "images", "workflow", "final_report", "schema_version"],
+  "properties": {
+    "schema_version": {"type": "string"},
+    "case_id": {"type": "string"},
+    "patient": {
+      "type": "object",
+      "required": ["patient_id"],
+      "properties": {
+        "patient_id": {"type": "string"},
+        "age": {"type": ["integer", "null"]},
+        "gender": {"type": ["string", "null"]},
+        "history": {"type": ["string", "null"]}
+      }
+    },
+    "images": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["image_id", "path"],
+        "properties": {
+          "image_id": {"type": "string"},
+          "path": {"type": "string"},
+          "modality": {"type": ["string", "null"]},
+          "eye": {"type": ["string", "null"], "enum": ["OD", "OS", null]},
+          "meta": {"type": ["object", "null"]}
+        }
+      }
+    },
+    "workflow": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["agent", "role", "reasoning"],
+        "properties": {
+          "agent": {"type": "string"},
+          "role": {"type": "string"},
+          "inputs": {"type": ["object", "null"]},
+          "tool_calls": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["tool_id", "version"],
+              "properties": {
+                "tool_id": {"type": "string"},
+                "mcp_tool": {"type": ["string", "null"]},
+                "version": {"type": "string"},
+                "arguments": {"type": ["object", "null"]},
+                "output": {"type": ["object", "array", "string", "null"]},
+                "confidence": {"type": ["number", "null"]},
+                "reasoning": {"type": ["string", "null"]},
+                "status": {"type": ["string", "null"], "enum": ["success", "failed", null]}
+              }
+            }
+          },
+          "outputs": {"type": ["object", "null"]},
+          "reasoning": {"type": "string"}
+        }
+      }
+    },
+    "final_report": {
+      "type": "object",
+      "required": ["diagnoses", "reasoning"],
+      "properties": {
+        "diagnoses": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["disease", "confidence"],
+            "properties": {
+              "disease": {"type": "string"},
+              "grade": {"type": ["string", "null"]},
+              "confidence": {"type": ["number", "null"]},
+              "evidence": {"type": ["array", "null"], "items": {"type": "string"}}
+            }
+          }
+        },
+        "lesions": {"type": ["object", "null"]},
+        "management": {"type": ["object", "null"]},
+        "reasoning": {"type": "string"}
+      }
+    },
+    "generated_at": {"type": ["string", "null"]},
+    "trace_log_path": {"type": ["string", "null"]}
+  }
+}

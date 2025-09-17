@@ -160,3 +160,96 @@ The structured logs help you understand:
 - **Concurrent execution tracking** in multi-agent scenarios
 
 Check the console output when running queries to see the complete agent interaction flow with professional loguru formatting!
+
+## 🩺 Ophthalmology Multi-Agent Diagnostic System (Beta)
+
+A multi-agent workflow for ophthalmic imaging using LangGraph. Agents: Orchestrator → Image Analysis → Specialist → Follow-up → Report. Key capabilities:
+- Multi-agent coordination with role-specific tools
+- Structured reasoning and tool_call logging per agent
+- Central Tool Registry aligned with MCP tool IDs and modalities
+- Full traceability: per-case trace events (agent_step/tool_call/error) and a final report JSON
+- Prompt-friendly metadata (short/long descriptions) for later prompt optimization
+
+### New Files and Structure
+```
+eyeagent/
+   tracing/trace_logger.py         # Trace events + final report persistence
+   tools/tool_registry.py          # Tool metadata registry & queries
+   schemas/diagnosis_report_schema.json  # Final report JSON schema
+   agents/
+      diagnostic_base_agent.py
+      orchestrator_agent.py
+      image_analysis_agent.py
+      specialist_agent.py
+      followup_agent.py
+      report_agent.py
+   diagnostic_workflow.py          # LangGraph workflow
+   run_diagnosis.py                # CLI entry point
+```
+
+### How to Run
+1. Ensure the MCP server provides required tools (modality, laterality, quality, lesion segmentation, screening, disease-specific grading, etc.).
+2. Run:
+```bash
+uv run python run_diagnosis.py \
+   --patient '{"patient_id":"P001","age":63,"gender":"M"}' \
+   --images '[{"image_id":"IMG001","path":"/data/cfp1.jpg"}]'
+```
+3. Outputs: prints the final report and writes:
+```
+By default, cases are saved under `<repo_root>/cases/<case_id>/`.
+You can override with:
+
+- EYEAGENT_CASES_DIR: absolute path to cases directory
+- EYEAGENT_DATA_DIR: parent dir; cases will be stored under `$EYEAGENT_DATA_DIR/cases`
+
+Examples:
+- $EYEAGENT_CASES_DIR=/data/eyeagent/cases → /data/eyeagent/cases/<case_id>/trace.json
+- $EYEAGENT_DATA_DIR=/data/eyeagent → /data/eyeagent/cases/<case_id>/final_report.json
+```
+
+### Report Schema Overview
+Conforms to `schemas/diagnosis_report_schema.json`:
+- patient / images
+- workflow: per-agent {agent, role, outputs, tool_calls[], reasoning}
+- final_report: {diagnoses[], lesions, management, reasoning}
+- trace_log_path: pointer to trace.json
+
+### Reasoning & Traceability
+- `trace_logger` writes events after every tool call and agent step
+- Failures are captured with `status=failed` + `error`
+- Enables root-cause analysis for diagnostic errors (routing, lesion detection, grading)
+
+### Add New Disease Models
+In `tools/tool_registry.py`, add entries such as:
+```python
+"my_disease_grading": {
+   "mcp_name": "my_disease_grading_model",
+   "version": "1.0.0",
+   "role": "specialist",
+   "disease": "MyDisease",
+   "desc": "Disease grading",
+   "desc_long": "Detailed description for prompts"
+}
+```
+
+### Prompt Optimization Ready
+- Agents dynamically assemble allowed_tool_ids
+- Use `desc_long` for richer prompt context
+- Keep prompt variants in a `prompt_variants/` directory to compare with text grad
+
+### Testing Tips
+- Mock MCP tools with deterministic outputs
+- Verify:
+   - Orchestrator emits a planned_pipeline
+   - Specialist only calls tools for candidate diseases
+   - Follow-up rules cover high-risk grades
+   - Report merges fields according to schema
+
+### Roadmap
+- Conditional branches (e.g., low image quality → retake)
+- Retry/backoff and graceful degradation
+- Confidence gating and human-in-the-loop review prompts
+- Graph optimizations with more parallelism
+
+---

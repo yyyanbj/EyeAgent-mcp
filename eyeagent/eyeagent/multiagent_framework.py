@@ -31,8 +31,8 @@ llm = ChatOpenAI(
     temperature=1.0,
 )
 
-# MCP Server URL
-MCP_SERVER_URL = "http://localhost:8001/mcp/"
+# MCP Server URL (env override, default 8000)
+MCP_SERVER_URL = os.getenv("MCP_SERVER_URL", "http://localhost:8000/mcp/")
 
 # Define tool mappings for each agent role
 AGENT_TOOLS = {

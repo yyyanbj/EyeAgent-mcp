@@ -33,4 +33,9 @@ requires = ["setuptools", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
-packages = []
+packages = ["eyeagent"]
+
+[project.scripts]
+eyeagent-diagnose = "eyeagent.run_diagnosis:main"
+eyeagent-multiagent = "eyeagent.run_multiagent:main"
+eyeagent-ui = "eyeagent.ui.app:main"
