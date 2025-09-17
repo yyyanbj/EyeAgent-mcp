@@ -1,7 +1,9 @@
 from typing import Any, Dict, List
 from .diagnostic_base_agent import DiagnosticBaseAgent
+from .registry import register_agent
 from fastmcp import Client
 
+@register_agent
 class ImageAnalysisAgent(DiagnosticBaseAgent):
     role = "image_analysis"
     name = "ImageAnalysisAgent"
@@ -19,7 +21,7 @@ class ImageAnalysisAgent(DiagnosticBaseAgent):
         "segmentation:cfp_laserspots",
         "segmentation:cfp_membrane",
         "segmentation:cfp_edema",
-        "classification:multidis",
+        # "classification:multidis",
         # OCT
         "segmentation:oct_layer",
         "segmentation:oct_PMchovefosclera",
@@ -29,8 +31,17 @@ class ImageAnalysisAgent(DiagnosticBaseAgent):
     ]
     system_prompt = (
         "You are the image analysis agent. Based on the inferred modality (CFP/OCT/FFA), perform quality assessment when applicable, "
-        "run modality-appropriate lesion segmentation, and for CFP run a multi-disease screening classifier. Provide reasoning and structured outputs."
+        "and run modality-appropriate lesion segmentation. Provide reasoning and structured outputs."
     )
+
+    # Capabilities declaration for image analysis
+    capabilities = {
+        "required_context": ["images", "orchestrator_outputs"],
+        "expected_outputs": ["quality", "lesions", "diseases"],
+        "retry_policy": {"max_attempts": 2, "on_fail": "skip"},
+        "modalities": ["CFP", "OCT", "FFA"],
+        "tools": allowed_tool_ids,
+    }
 
     async def a_run(self, context: Dict[str, Any]) -> Dict[str, Any]:
         images = context.get("images", [])
@@ -51,7 +62,7 @@ class ImageAnalysisAgent(DiagnosticBaseAgent):
             except Exception:
                 modality = None
 
-        task_desc = "Perform modality-appropriate analysis (quality if applicable, segmentation, and CFP multi-disease screening)."
+        task_desc = "Perform modality-appropriate analysis (quality if applicable, segmentation)."
         plan = await self.plan_tools(task_desc, self.allowed_tool_ids)
         if not plan:
             plan = []
@@ -62,7 +73,6 @@ class ImageAnalysisAgent(DiagnosticBaseAgent):
                 for tid in self.allowed_tool_ids:
                     if tid.startswith("segmentation:cfp_"):
                         plan.append({"tool_id": tid, "arguments": None, "reasoning": "Run CFP lesion segmentation."})
-                plan.append({"tool_id": "classification:multidis", "arguments": None, "reasoning": "Screen for multiple diseases (CFP)."})
             elif (modality or "").upper() == "OCT":
                 for tid in self.allowed_tool_ids:
                     if tid.startswith("segmentation:oct_"):
@@ -119,12 +129,14 @@ class ImageAnalysisAgent(DiagnosticBaseAgent):
             except Exception:
                 tops = list(diseases.items())[:3]
             top_d_txt = ", ".join([f"{k} {_fmt_prob(v)}" for k, v in tops])
-        reasoning = (
+        # Prepare a concise context summary for reasoning; then let LLM polish it
+        base_summary = (
             "Image analysis summary: "
             f"image quality is {q_txt}. "
             f"Segmentation suggests {lesion_txt}. "
             + (f"Top disease likelihoods: {top_d_txt}." if top_d_txt else "")
         ).strip()
+        reasoning = self.gen_reasoning(base_summary)
         outputs = {"quality": quality, "lesions": lesions, "diseases": diseases, "narrative": reasoning}
 
         self.trace_logger.append_event(self.case_id, {

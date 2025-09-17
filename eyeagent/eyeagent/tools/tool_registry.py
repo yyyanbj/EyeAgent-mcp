@@ -14,14 +14,16 @@ TOOL_REGISTRY: Dict[str, Dict[str, Any]] = {
         "version": "1.0.0",
         "role": "orchestrator",
         "modalities": ["CFP", "OCT", "FFA"],
-        "desc": "Classify imaging modality (CFP/OCT/FFA).",
+    "desc": "Classify imaging modality (CFP/OCT/FFA).",
+    "args_schema": {"type": "object", "properties": {"image_path": {"type": "string"}}, "required": ["image_path"]},
         "desc_long": "Predicts the imaging modality to route the downstream pipeline appropriately."
     },
     "classification:laterality": {
         "mcp_name": "classification:laterality",
         "version": "1.0.0",
         "role": "orchestrator",
-        "desc": "Classify eye laterality (OD/OS).",
+    "desc": "Classify eye laterality (OD/OS).",
+    "args_schema": {"type": "object", "properties": {"image_path": {"type": "string"}}, "required": ["image_path"]},
         "desc_long": "Determines whether the image is from right (OD) or left (OS) eye."
     },
     "classification:cfp_quality": {
@@ -29,7 +31,8 @@ TOOL_REGISTRY: Dict[str, Dict[str, Any]] = {
         "version": "1.2.0",
         "role": "image_analysis",
         "modalities": ["CFP"],
-        "desc": "CFP image quality assessment.",
+    "desc": "CFP image quality assessment.",
+    "args_schema": {"type": "object", "properties": {"image_path": {"type": "string"}}, "required": ["image_path"]},
         "desc_long": "Estimates whether the color fundus photograph is of sufficient quality."
     },
     "classification:multidis": {
@@ -37,7 +40,8 @@ TOOL_REGISTRY: Dict[str, Dict[str, Any]] = {
         "version": "1.4.0",
         "role": "image_analysis",
         "modalities": ["CFP"],
-        "desc": "Multi-disease screening classifier.",
+    "desc": "Multi-disease screening classifier.",
+    "args_schema": {"type": "object", "properties": {"image_path": {"type": "string"}}, "required": ["image_path"]},
         "desc_long": "Outputs probabilities for multiple diseases such as DR/AMD/Glaucoma to seed specialist grading."
     },
     "classification:cfp_age": {
@@ -45,7 +49,8 @@ TOOL_REGISTRY: Dict[str, Dict[str, Any]] = {
         "version": "1.0.0",
         "role": "follow_up",
         "modalities": ["CFP"],
-        "desc": "Age estimation from CFP.",
+    "desc": "Age estimation from CFP.",
+    "args_schema": {"type": "object", "properties": {"image_path": {"type": "string"}}, "required": ["image_path"]},
         "desc_long": "Estimates age bracket to support management planning."
     },
 
@@ -55,7 +60,8 @@ TOOL_REGISTRY: Dict[str, Dict[str, Any]] = {
         "version": "2.0.0",
         "role": "image_analysis",
         "modalities": ["CFP"],
-        "desc": "CFP lesion segmentation for DR-related findings.",
+    "desc": "CFP lesion segmentation for DR-related findings.",
+    "args_schema": {"type": "object", "properties": {"image_path": {"type": "string"}}, "required": ["image_path"]},
         "desc_long": "Segments DR-related lesions such as hemorrhages/exudates/etc."
     },
     "segmentation:cfp_artifact": {
@@ -63,7 +69,8 @@ TOOL_REGISTRY: Dict[str, Dict[str, Any]] = {
         "version": "2.0.0",
         "role": "image_analysis",
         "modalities": ["CFP"],
-        "desc": "CFP artifact segmentation.",
+    "desc": "CFP artifact segmentation.",
+    "args_schema": {"type": "object", "properties": {"image_path": {"type": "string"}}, "required": ["image_path"]},
         "desc_long": "Segments artifacts that may affect diagnosis."
     },
     "segmentation:cfp_atrophy": {
@@ -71,7 +78,8 @@ TOOL_REGISTRY: Dict[str, Dict[str, Any]] = {
         "version": "2.0.0",
         "role": "image_analysis",
         "modalities": ["CFP"],
-        "desc": "CFP atrophy segmentation.",
+    "desc": "CFP atrophy segmentation.",
+    "args_schema": {"type": "object", "properties": {"image_path": {"type": "string"}}, "required": ["image_path"]},
         "desc_long": "Segments atrophic regions on CFP."
     },
     "segmentation:cfp_drusen": {
@@ -79,7 +87,8 @@ TOOL_REGISTRY: Dict[str, Dict[str, Any]] = {
         "version": "2.0.0",
         "role": "image_analysis",
         "modalities": ["CFP"],
-        "desc": "CFP drusen segmentation.",
+    "desc": "CFP drusen segmentation.",
+    "args_schema": {"type": "object", "properties": {"image_path": {"type": "string"}}, "required": ["image_path"]},
         "desc_long": "Segments drusen lesions."
     },
     "segmentation:cfp_cnv": {
@@ -87,7 +96,8 @@ TOOL_REGISTRY: Dict[str, Dict[str, Any]] = {
         "version": "2.0.0",
         "role": "image_analysis",
         "modalities": ["CFP"],
-        "desc": "CFP CNV segmentation.",
+    "desc": "CFP CNV segmentation.",
+    "args_schema": {"type": "object", "properties": {"image_path": {"type": "string"}}, "required": ["image_path"]},
         "desc_long": "Segments choroidal neovascularization regions."
     },
     "segmentation:cfp_mh": {
@@ -95,7 +105,8 @@ TOOL_REGISTRY: Dict[str, Dict[str, Any]] = {
         "version": "2.0.0",
         "role": "image_analysis",
         "modalities": ["CFP"],
-        "desc": "CFP macular hole segmentation.",
+    "desc": "CFP macular hole segmentation.",
+    "args_schema": {"type": "object", "properties": {"image_path": {"type": "string"}}, "required": ["image_path"]},
         "desc_long": "Segments macular hole related findings."
     },
     "segmentation:cfp_rd": {
@@ -103,7 +114,8 @@ TOOL_REGISTRY: Dict[str, Dict[str, Any]] = {
         "version": "2.0.0",
         "role": "image_analysis",
         "modalities": ["CFP"],
-        "desc": "CFP retinal detachment segmentation.",
+    "desc": "CFP retinal detachment segmentation.",
+    "args_schema": {"type": "object", "properties": {"image_path": {"type": "string"}}, "required": ["image_path"]},
         "desc_long": "Segments retinal detachment-related regions."
     },
     "segmentation:cfp_scar": {
@@ -111,7 +123,8 @@ TOOL_REGISTRY: Dict[str, Dict[str, Any]] = {
         "version": "2.0.0",
         "role": "image_analysis",
         "modalities": ["CFP"],
-        "desc": "CFP scar segmentation.",
+    "desc": "CFP scar segmentation.",
+    "args_schema": {"type": "object", "properties": {"image_path": {"type": "string"}}, "required": ["image_path"]},
         "desc_long": "Segments scar regions."
     },
     "segmentation:cfp_laserscar": {
@@ -119,7 +132,8 @@ TOOL_REGISTRY: Dict[str, Dict[str, Any]] = {
         "version": "2.0.0",
         "role": "image_analysis",
         "modalities": ["CFP"],
-        "desc": "CFP laser scar segmentation.",
+    "desc": "CFP laser scar segmentation.",
+    "args_schema": {"type": "object", "properties": {"image_path": {"type": "string"}}, "required": ["image_path"]},
         "desc_long": "Segments laser scar regions."
     },
     "segmentation:cfp_laserspots": {
@@ -127,7 +141,8 @@ TOOL_REGISTRY: Dict[str, Dict[str, Any]] = {
         "version": "2.0.0",
         "role": "image_analysis",
         "modalities": ["CFP"],
-        "desc": "CFP laser spot segmentation.",
+    "desc": "CFP laser spot segmentation.",
+    "args_schema": {"type": "object", "properties": {"image_path": {"type": "string"}}, "required": ["image_path"]},
         "desc_long": "Segments laser spots."
     },
     "segmentation:cfp_membrane": {
@@ -135,7 +150,8 @@ TOOL_REGISTRY: Dict[str, Dict[str, Any]] = {
         "version": "2.0.0",
         "role": "image_analysis",
         "modalities": ["CFP"],
-        "desc": "CFP membrane segmentation.",
+    "desc": "CFP membrane segmentation.",
+    "args_schema": {"type": "object", "properties": {"image_path": {"type": "string"}}, "required": ["image_path"]},
         "desc_long": "Segments membrane-like lesions."
     },
     "segmentation:cfp_edema": {
@@ -143,7 +159,8 @@ TOOL_REGISTRY: Dict[str, Dict[str, Any]] = {
         "version": "2.0.0",
         "role": "image_analysis",
         "modalities": ["CFP"],
-        "desc": "CFP edema segmentation.",
+    "desc": "CFP edema segmentation.",
+    "args_schema": {"type": "object", "properties": {"image_path": {"type": "string"}}, "required": ["image_path"]},
         "desc_long": "Segments edema-related regions."
     },
 
@@ -153,7 +170,8 @@ TOOL_REGISTRY: Dict[str, Dict[str, Any]] = {
         "version": "2.0.0",
         "role": "image_analysis",
         "modalities": ["OCT"],
-        "desc": "OCT layer segmentation.",
+    "desc": "OCT layer segmentation.",
+    "args_schema": {"type": "object", "properties": {"image_path": {"type": "string"}}, "required": ["image_path"]},
         "desc_long": "Segments retinal layers in OCT scans."
     },
     "segmentation:oct_PMchovefosclera": {
@@ -161,7 +179,8 @@ TOOL_REGISTRY: Dict[str, Dict[str, Any]] = {
         "version": "2.0.0",
         "role": "image_analysis",
         "modalities": ["OCT"],
-        "desc": "OCT posterior pole/sclera segmentation.",
+    "desc": "OCT posterior pole/sclera segmentation.",
+    "args_schema": {"type": "object", "properties": {"image_path": {"type": "string"}}, "required": ["image_path"]},
         "desc_long": "Segments posterior myopia/choroid/sclera regions (per tool naming)."
     },
     "segmentation:oct_lesion": {
@@ -169,7 +188,8 @@ TOOL_REGISTRY: Dict[str, Dict[str, Any]] = {
         "version": "2.0.0",
         "role": "image_analysis",
         "modalities": ["OCT"],
-        "desc": "OCT lesion segmentation.",
+    "desc": "OCT lesion segmentation.",
+    "args_schema": {"type": "object", "properties": {"image_path": {"type": "string"}}, "required": ["image_path"]},
         "desc_long": "Segments lesion regions in OCT scans."
     },
 
@@ -179,7 +199,8 @@ TOOL_REGISTRY: Dict[str, Dict[str, Any]] = {
         "version": "2.0.0",
         "role": "image_analysis",
         "modalities": ["FFA"],
-        "desc": "FFA lesion segmentation.",
+    "desc": "FFA lesion segmentation.",
+    "args_schema": {"type": "object", "properties": {"image_path": {"type": "string"}}, "required": ["image_path"]},
         "desc_long": "Segments lesion regions in FFA images."
     },
 

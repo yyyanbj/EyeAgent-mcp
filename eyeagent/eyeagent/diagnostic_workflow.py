@@ -3,9 +3,11 @@ from typing import Dict, Any, List
 import os
 import asyncio
 from dotenv import load_dotenv
+from .core.logging import setup_logging
 
 # Load environment variables from .env, if present
 load_dotenv()
+setup_logging()
 
 # Try to import LangGraph; if unavailable, fall back to a simple sequential runner
 try:
@@ -16,11 +18,24 @@ except Exception:  # ImportError or others
     START = END = None  # type: ignore
     _LANGGRAPH_AVAILABLE = False
 from .tracing.trace_logger import TraceLogger
+from loguru import logger
 from .agents.orchestrator_agent import OrchestratorAgent
 from .agents.image_analysis_agent import ImageAnalysisAgent
 from .agents.specialist_agent import SpecialistAgent
 from .agents.followup_agent import FollowUpAgent
 from .agents.report_agent import ReportAgent
+from .agents.registry import register_builtins, get_agent_class
+from .agents.capabilities import get_capabilities
+def get_pipeline_capabilities(pipeline: list) -> list:
+    """Return a list of capabilities for the given pipeline (list of agent class keys)."""
+    out = []
+    for key in pipeline:
+        cls = get_agent_class(key)
+        if cls:
+            out.append({"key": key, "capabilities": get_capabilities(cls)})
+    return out
+from .config.pipelines import get_profile_steps, step_should_run
+from .metrics.metrics import step_timer
 
 MCP_SERVER_URL = os.getenv("MCP_SERVER_URL", "http://localhost:8000/mcp/")
 SCHEMA_VERSION = "1.0.0"
@@ -30,20 +45,24 @@ class WorkflowState(dict):
     pass
 
 async def node_orchestrator(state: WorkflowState) -> WorkflowState:
+    logger.debug("[workflow] enter node_orchestrator")
     agent = OrchestratorAgent(MCP_SERVER_URL, state["trace"], state["case_id"])
     # Always pass instruction to orchestrator
     context = dict(state)
     if "patient" in state and "instruction" in state["patient"]:
         context["instruction"] = state["patient"]["instruction"]
-    res = await agent.a_run(context)
+    with step_timer(agent.__class__.__name__, agent.role):
+        res = await agent.a_run(context)
     state.setdefault("workflow", []).append(res)
     state["pipeline"] = res["outputs"].get("planned_pipeline", [])
     # Save orchestrator's plan/command for downstream
     state["orchestrator_command"] = context.get("instruction")
     state["orchestrator_outputs"] = res["outputs"]
+    logger.debug(f"[workflow] orchestrator pipeline={state.get('pipeline')}")
     return state
 
 async def node_image_analysis(state: WorkflowState) -> WorkflowState:
+    logger.debug("[workflow] enter node_image_analysis")
     agent = ImageAnalysisAgent(MCP_SERVER_URL, state["trace"], state["case_id"])
     # Pass orchestrator command and outputs
     context = dict(state)
@@ -51,12 +70,15 @@ async def node_image_analysis(state: WorkflowState) -> WorkflowState:
         context["orchestrator_command"] = state["orchestrator_command"]
     if "orchestrator_outputs" in state:
         context["orchestrator_outputs"] = state["orchestrator_outputs"]
-    res = await agent.a_run(context)
+    with step_timer(agent.__class__.__name__, agent.role):
+        res = await agent.a_run(context)
     state.setdefault("workflow", []).append(res)
     state["image_analysis"] = res["outputs"]
+    logger.debug("[workflow] exit node_image_analysis")
     return state
 
 async def node_specialist(state: WorkflowState) -> WorkflowState:
+    logger.debug("[workflow] enter node_specialist")
     # derive candidate diseases from multi-disease screening
     ia = state.get("image_analysis", {})
     md = ia.get("diseases")
@@ -79,12 +101,15 @@ async def node_specialist(state: WorkflowState) -> WorkflowState:
         context["orchestrator_outputs"] = state["orchestrator_outputs"]
     if "image_analysis" in state:
         context["image_analysis"] = state["image_analysis"]
-    res = await agent.a_run(context)
+    with step_timer(agent.__class__.__name__, agent.role):
+        res = await agent.a_run(context)
     state.setdefault("workflow", []).append(res)
     state["specialist"] = res["outputs"]
+    logger.debug("[workflow] exit node_specialist")
     return state
 
 async def node_followup(state: WorkflowState) -> WorkflowState:
+    logger.debug("[workflow] enter node_followup")
     # requires disease_grades
     state["disease_grades"] = (state.get("specialist") or {}).get("disease_grades", [])
     agent = FollowUpAgent(MCP_SERVER_URL, state["trace"], state["case_id"])
@@ -96,12 +121,15 @@ async def node_followup(state: WorkflowState) -> WorkflowState:
         context["orchestrator_outputs"] = state["orchestrator_outputs"]
     if "specialist" in state:
         context["specialist"] = state["specialist"]
-    res = await agent.a_run(context)
+    with step_timer(agent.__class__.__name__, agent.role):
+        res = await agent.a_run(context)
     state.setdefault("workflow", []).append(res)
     state["follow_up"] = res["outputs"]
+    logger.debug("[workflow] exit node_followup")
     return state
 
 async def node_report(state: WorkflowState) -> WorkflowState:
+    logger.debug("[workflow] enter node_report")
     agent = ReportAgent(MCP_SERVER_URL, state["trace"], state["case_id"])
     # Pass orchestrator command and outputs, and all upstream outputs
     context = dict(state)
@@ -115,13 +143,86 @@ async def node_report(state: WorkflowState) -> WorkflowState:
         context["specialist"] = state["specialist"]
     if "follow_up" in state:
         context["follow_up"] = state["follow_up"]
-    res = await agent.a_run(context)
+    with step_timer(agent.__class__.__name__, agent.role):
+        res = await agent.a_run(context)
     state.setdefault("workflow", []).append(res)
     state["final_fragment"] = res["outputs"]
+    logger.debug("[workflow] exit node_report")
     return state
 
 def compile_graph():
     use_langgraph = _LANGGRAPH_AVAILABLE and os.getenv("EYEAGENT_USE_LANGGRAPH", "0").lower() in ("1", "true", "yes")
+    logger.debug(f"[workflow] compile_graph use_langgraph={use_langgraph}")
+    # Always ensure built-ins are registered before graph assembly
+    register_builtins()
+
+    # Optional: static pipeline override (comma-separated class/role names), bypassing orchestrator
+    pipeline_override = os.getenv("EYEAGENT_PIPELINE")
+    if pipeline_override:
+        steps = [s.strip() for s in pipeline_override.split(",") if s.strip()]
+        logger.debug(f"[workflow] pipeline override steps={steps}")
+
+        class _StaticGraph:
+            async def ainvoke(self, state: WorkflowState) -> WorkflowState:
+                for key in steps:
+                    cls = get_agent_class(key)
+                    if not cls:
+                        logger.warning(f"[workflow] unknown pipeline step '{key}' – skipping")
+                        continue
+                    agent = cls(MCP_SERVER_URL, state["trace"], state["case_id"])  # type: ignore[call-arg]
+                    with step_timer(agent.__class__.__name__, agent.role):
+                        res = await agent.a_run(dict(state))
+                    state.setdefault("workflow", []).append(res)
+                    # merge known outputs by role for downstream usage
+                    role = getattr(agent, "role", None)
+                    if role == "image_analysis":
+                        state["image_analysis"] = res.get("outputs")
+                    elif role == "specialist":
+                        state["specialist"] = res.get("outputs")
+                    elif role == "follow_up":
+                        state["follow_up"] = res.get("outputs")
+                    elif role == "orchestrator":
+                        state["pipeline"] = (res.get("outputs") or {}).get("planned_pipeline", [])
+                return state
+
+        return _StaticGraph()
+
+    # Optional: profile-driven pipeline (YAML/JSON with conditions)
+    profile = os.getenv("EYEAGENT_PIPELINE_PROFILE")
+    if profile:
+        steps = get_profile_steps(profile)
+        logger.debug(f"[workflow] profile={profile} steps={[s.get('name') for s in steps]}")
+
+        class _ProfileGraph:
+            async def ainvoke(self, state: WorkflowState) -> WorkflowState:
+                for s in steps:
+                    name = s.get("name")
+                    if not name:
+                        continue
+                    if not step_should_run(s, state):
+                        logger.debug(f"[workflow] skip step={name} (condition false)")
+                        continue
+                    cls = get_agent_class(name)
+                    if not cls:
+                        logger.warning(f"[workflow] unknown step='{name}' – skipping")
+                        continue
+                    agent = cls(MCP_SERVER_URL, state["trace"], state["case_id"])  # type: ignore
+                    logger.debug(f"[workflow] run step={name}")
+                    with step_timer(agent.__class__.__name__, agent.role):
+                        res = await agent.a_run(dict(state))
+                    state.setdefault("workflow", []).append(res)
+                    role = getattr(agent, "role", None)
+                    if role == "image_analysis":
+                        state["image_analysis"] = res.get("outputs")
+                    elif role == "specialist":
+                        state["specialist"] = res.get("outputs")
+                    elif role == "follow_up":
+                        state["follow_up"] = res.get("outputs")
+                    elif role == "orchestrator":
+                        state["pipeline"] = (res.get("outputs") or {}).get("planned_pipeline", [])
+                return state
+
+        return _ProfileGraph()
     if use_langgraph:
         g = StateGraph(WorkflowState)  # type: ignore[call-arg]
         g.add_node("orchestrator", node_orchestrator)

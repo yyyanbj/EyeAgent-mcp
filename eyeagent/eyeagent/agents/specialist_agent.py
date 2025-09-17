@@ -1,8 +1,10 @@
 from typing import Any, Dict, List
 from .diagnostic_base_agent import DiagnosticBaseAgent
+from .registry import register_agent
 from ..tools.tool_registry import specialist_tools, get_tool, resolve_specialist_tools
 from fastmcp import Client
 
+@register_agent
 class SpecialistAgent(DiagnosticBaseAgent):
     role = "specialist"
     name = "SpecialistAgent"
@@ -10,6 +12,15 @@ class SpecialistAgent(DiagnosticBaseAgent):
     system_prompt = (
         "You are the specialist agent. For candidate diseases, call corresponding grading models and return results with reasoning."
     )
+
+    # Capabilities declaration for specialist
+    capabilities = {
+        "required_context": ["candidate_diseases", "images"],
+        "expected_outputs": ["disease_grades", "narrative"],
+        "retry_policy": {"max_attempts": 2, "on_fail": "skip"},
+        "modalities": ["CFP", "OCT", "FFA"],
+        "tools": [],  # dynamic per run
+    }
 
     async def a_run(self, context: Dict[str, Any]) -> Dict[str, Any]:
         candidate_diseases: List[str] = context.get("candidate_diseases", [])
@@ -63,7 +74,7 @@ class SpecialistAgent(DiagnosticBaseAgent):
                         "tool_id": tool_id
                     })
         # Narrative summary for specialist grading
-        bits = []
+        bits: List[str] = []
         for r in results:
             d = r.get("disease")
             g = r.get("grade")
@@ -76,7 +87,8 @@ class SpecialistAgent(DiagnosticBaseAgent):
                     except Exception:
                         s += f" ({conf})"
                 bits.append(s)
-        reasoning = ("Specialist grading summary: " + ", ".join(bits)) if bits else "Specialist grading completed."
+        base_summary = ("Specialist grading summary: " + ", ".join(bits)) if bits else "Specialist grading completed."
+        reasoning = self.gen_reasoning(base_summary)
         outputs = {"disease_grades": results, "narrative": reasoning}
         self.trace_logger.append_event(self.case_id, {
             "type": "agent_step",

@@ -1,7 +1,9 @@
 from typing import Any, Dict, List
 from .diagnostic_base_agent import DiagnosticBaseAgent
+from .registry import register_agent
 from fastmcp import Client
 
+@register_agent
 class FollowUpAgent(DiagnosticBaseAgent):
     role = "follow_up"
     name = "FollowUpAgent"
@@ -9,6 +11,15 @@ class FollowUpAgent(DiagnosticBaseAgent):
     system_prompt = (
         "You are the follow-up agent. Combine disease grades and age to produce management suggestions with reasoning."
     )
+
+    # Capabilities declaration for follow-up
+    capabilities = {
+        "required_context": ["disease_grades", "images"],
+        "expected_outputs": ["management", "narrative"],
+        "retry_policy": {"max_attempts": 1, "on_fail": "skip"},
+        "modalities": ["CFP"],
+        "tools": allowed_tool_ids,
+    }
 
     async def a_run(self, context: Dict[str, Any]) -> Dict[str, Any]:
         disease_grades = context.get("disease_grades", [])
@@ -51,12 +62,13 @@ class FollowUpAgent(DiagnosticBaseAgent):
             age_pred = age_info.get("prediction") or age_info.get("age")
             if age_pred is not None:
                 age_txt = str(age_pred)
-        reasoning = (
+        base_summary = (
             "Follow-up summary: "
             f"recommendation is '{suggestion}' with interval {follow_up_months} months"
             + (f", estimated age {age_txt}" if age_txt else "")
             + "."
         )
+        reasoning = self.gen_reasoning(base_summary)
         outputs = {"management": {"suggestion": suggestion, "follow_up_months": follow_up_months, "age_info": age_info}, "narrative": reasoning}
 
         self.trace_logger.append_event(self.case_id, {

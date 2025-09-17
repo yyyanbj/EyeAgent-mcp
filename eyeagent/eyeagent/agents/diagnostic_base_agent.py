@@ -6,10 +6,34 @@ from fastmcp import Client
 import os
 
 from ..tracing.trace_logger import TraceLogger
+from ..metrics.metrics import tool_timer, add_tokens
 from ..tools.tool_registry import get_tool
 from ..config.prompts import PromptsConfig
+from ..llm.json_client import JsonLLM
+from ..llm.models import ToolPlan, ReasoningOut
+from ..tools.langchain_mcp_tools import build_langchain_mcp_tools, load_tools_from_mcp
+from langchain_core.messages import SystemMessage, HumanMessage, AIMessage, ToolMessage
+from langchain_openai import ChatOpenAI
+import os
 
 class DiagnosticBaseAgent:
+    # Capabilities declaration (subclasses should override as needed)
+    capabilities: dict = {
+        "required_context": [],
+        "expected_outputs": [],
+        "retry_policy": {"max_attempts": 1, "on_fail": "fail"},
+        "modalities": [],
+        "tools": [],
+    }
+
+    # Subclasses can override as:
+    # capabilities = {
+    #   "required_context": ["images", "patient"],
+    #   "expected_outputs": ["diagnoses", "lesions"],
+    #   "retry_policy": {"max_attempts": 2, "on_fail": "skip"},
+    #   "modalities": ["CFP", "OCT"],
+    #   "tools": ["classification:modality", ...]
+    # }
     """Base class for diagnostic agents with reasoning and trace hooks.
 
     Input context: patient, images, and accumulated intermediate results.
@@ -50,7 +74,9 @@ class DiagnosticBaseAgent:
         try:
             if not meta:
                 raise ValueError(f"Unknown tool_id={tool_id}")
-            raw = await client.call_tool(name=meta["mcp_name"], arguments=arguments)
+            # Measure latency and error status via context manager
+            with tool_timer(tool_id):
+                raw = await client.call_tool(name=meta["mcp_name"], arguments=arguments)
             output = self._normalize_tool_result(raw)
             event = {**event_base, "status": "success", "output": output}
             self.trace_logger.append_event(self.case_id, event)
@@ -68,8 +94,205 @@ class DiagnosticBaseAgent:
         return asyncio.run(self.a_run(context))
 
     async def plan_tools(self, task_desc: str, available: List[str]) -> List[Dict[str, Any]]:
-        """Planner disabled. Agents should return explicit tool steps; default empty."""
-        return []
+        """LLM planner: propose ordered tool calls with optional arguments.
+
+        Returns a list of {tool_id, arguments, reasoning}. If the model fails to
+        produce valid JSON or proposes unknown tools, return [].
+        """
+        available = available or []
+        if not available:
+            return []
+        # Build tool description hint
+        desc_lines: List[str] = []
+        for tid in available:
+            meta = get_tool(tid) or {"desc": "", "modalities": None, "role": self.role}
+            mod = meta.get("modalities")
+            mod_txt = f" modalities={','.join(mod)}" if mod else ""
+            schema = meta.get("args_schema")
+            if schema:
+                try:
+                    import json as _json
+                    schema_txt = _json.dumps(schema)
+                except Exception:
+                    schema_txt = str(schema)
+                desc_lines.append(f"- {tid}:{mod_txt} {meta.get('desc','')}\n  Args(JSON Schema): {schema_txt}")
+            else:
+                desc_lines.append(f"- {tid}:{mod_txt} {meta.get('desc','')}")
+        sys = (
+            f"You are the {self.name} ({self.role}) planning tool usage. Use only provided tools. "
+            f"Return strictly the JSON schema."
+        )
+        user = (
+            f"Task: {task_desc}\n\nAvailable tools:\n" + "\n".join(desc_lines)
+        )
+        try:
+            llm = JsonLLM(agent_name=self.__class__.__name__)
+            # Prefer structured schema
+            parsed: ToolPlan = llm.invoke_structured(sys, user, ToolPlan)  # type: ignore[assignment]
+            logger.debug(f"[{self.name}] plan_tools structured parsed: {parsed}")
+            out: List[Dict[str, Any]] = []
+            for step in parsed.plan:
+                if step.tool_id in available:
+                    out.append({
+                        "tool_id": step.tool_id,
+                        "arguments": step.arguments,
+                        "reasoning": step.reasoning,
+                    })
+            return out
+        except Exception:
+            # Fallback to plain JSON
+            try:
+                schema = '{"plan": [{"tool_id": "...", "arguments": {}, "reasoning": "..."}]}'
+                data = llm.invoke_json(system_prompt=sys, user_prompt=user, schema_hint=schema)
+                logger.debug(f"[{self.name}] plan_tools json parsed: {data}")
+                plan = data.get("plan") if isinstance(data, dict) else None
+                out: List[Dict[str, Any]] = []
+                if isinstance(plan, list):
+                    for step in plan:
+                        if not isinstance(step, dict):
+                            continue
+                        tid = step.get("tool_id")
+                        if tid not in available:
+                            continue
+                        out.append({
+                            "tool_id": tid,
+                            "arguments": step.get("arguments"),
+                            "reasoning": step.get("reasoning")
+                        })
+                return out
+            except Exception:
+                return []
+
+    def gen_reasoning(self, context_summary: str, schema_hint: Optional[str] = None) -> str:
+        """Generate reasoning/narrative via LLM JSON mode with constrained schema.
+
+        Returns the 'reasoning' field from JSON; falls back to input summary on failure.
+        """
+        sys = f"You are the {self.name} ({self.role}). Provide concise medical reasoning."
+        user = f"Context summary to explain concisely: {context_summary}"
+        try:
+            llm = JsonLLM(agent_name=self.__class__.__name__)
+            parsed: ReasoningOut = llm.invoke_structured(sys, user, ReasoningOut)  # type: ignore[assignment]
+            logger.debug(f"[{self.name}] reasoning structured parsed: {parsed}")
+            return parsed.reasoning or parsed.narrative or context_summary
+        except Exception:
+            # Fallback to plain JSON
+            try:
+                data = llm.invoke_json(system_prompt=sys, user_prompt=user, schema_hint='{"reasoning": "...", "narrative": "..."}')
+                logger.debug(f"[{self.name}] reasoning json parsed: {data}")
+                if isinstance(data, dict):
+                    return str(data.get("reasoning") or data.get("narrative") or context_summary)
+            except Exception:
+                pass
+            return context_summary
+
+    # ---- LLM bound-tools runtime -------------------------------------------
+    async def run_with_bound_tools(self,
+                                   messages: List[dict] | None,
+                                   allowed_tool_ids: List[str],
+                                   system_prompt: Optional[str] = None,
+                                   max_steps: int = 6) -> Dict[str, Any]:
+        """Drive an LLM that is bound to tools; intercept tool calls and execute via MCP (_call_tool) to keep trace.
+
+        messages: optional list of role/content dicts; if None, a default HumanMessage is built.
+        Returns a dict with keys: messages (langchain messages), tool_calls (list), final_response (AI content str).
+        """
+        # Build chat model per-agent using the same factory as JsonLLM
+        base_url = os.getenv("EYEAGENT_LLM_BASE_URL", os.getenv("AGENT_LLM_BASE_URL", "https://api.deepseek.com/v1"))
+        model_name = os.getenv(f"EYEAGENT_MODEL_{self.__class__.__name__}", os.getenv("AGENT_LLM_MODEL", "deepseek-chat"))
+        temperature = float(os.getenv("EYEAGENT_LLM_TEMPERATURE", "0.7"))
+        max_tokens = int(os.getenv("EYEAGENT_LLM_MAX_TOKENS", "4096"))
+        llm = ChatOpenAI(base_url=base_url, model=model_name, temperature=temperature, max_tokens=max_tokens)
+
+        # Build LangChain tool stubs for tool_calls; execution is handled by _call_tool for tracing
+        use_adapter = os.getenv("EYEAGENT_MCP_ADAPTER_BIND", "0").lower() in ("1", "true", "yes")
+        logger.debug(f"[{self.name}] bind tools use_adapter={use_adapter} allowed={allowed_tool_ids}")
+        # Map between our tool_ids and MCP tool names
+        tid_to_mcp = {}
+        mcp_to_tid = {}
+        for tid in allowed_tool_ids:
+            meta = get_tool(tid) or {}
+            mcpn = meta.get("mcp_name", tid)
+            tid_to_mcp[tid] = mcpn
+            mcp_to_tid[mcpn] = tid
+
+        if use_adapter:
+            try:
+                lc_tools = await load_tools_from_mcp(self.mcp_url, include_ids=allowed_tool_ids)
+                logger.debug(f"[{self.name}] adapter tools loaded: {[getattr(t,'name',None) for t in lc_tools]}")
+            except Exception as e:
+                logger.warning(f"MCP adapter bind failed: {e}; falling back to internal wrappers")
+                lc_tools = build_langchain_mcp_tools(allowed_tool_ids, self.mcp_url)
+                use_adapter = False
+        else:
+            lc_tools = build_langchain_mcp_tools(allowed_tool_ids, self.mcp_url)
+        logger.debug(f"[{self.name}] binding LLM with {len(lc_tools)} tools")
+        model = llm.bind_tools(lc_tools)
+
+        # Convert simple dict messages into LangChain message objects
+        lc_messages: List[Any] = []
+        if system_prompt:
+            lc_messages.append(SystemMessage(content=system_prompt))
+        for m in (messages or []):
+            role = (m.get("role") or "user").lower()
+            content = m.get("content") or ""
+            if role == "system":
+                lc_messages.append(SystemMessage(content=content))
+            elif role == "assistant":
+                lc_messages.append(AIMessage(content=content))
+            else:
+                lc_messages.append(HumanMessage(content=content))
+        if not lc_messages:
+            lc_messages = [HumanMessage(content="Use the available tools to progress the diagnosis, then summarize.")]
+
+        tool_calls_acc: List[Dict[str, Any]] = []
+        for step in range(max_steps):
+            logger.debug(f"[{self.name}] step={step} invoking model with {len(lc_messages)} messages")
+            resp = model.invoke(lc_messages)
+            # Token metrics if available
+            try:
+                meta = getattr(resp, "response_metadata", {}) or {}
+                usage = meta.get("token_usage") or {}
+                if usage:
+                    if usage.get("prompt_tokens"):
+                        add_tokens(self.__class__.__name__, "prompt", int(usage.get("prompt_tokens", 0)))
+                    if usage.get("completion_tokens"):
+                        add_tokens(self.__class__.__name__, "completion", int(usage.get("completion_tokens", 0)))
+                    if usage.get("total_tokens"):
+                        add_tokens(self.__class__.__name__, "total", int(usage.get("total_tokens", 0)))
+            except Exception:
+                pass
+            lc_messages.append(resp)
+            tcs = getattr(resp, "tool_calls", []) or []
+            if not tcs:
+                logger.debug(f"[{self.name}] no tool_calls; stopping loop")
+                break
+            # Execute each tool call via MCP to preserve our trace logging
+            for call in tcs:
+                name = call.get("name")
+                args = call.get("args") or {}
+                # Resolve name to our tool_id when using adapter-bound tools
+                tool_id = mcp_to_tid.get(name) if use_adapter else name
+                # Only execute allowed tools
+                if tool_id not in allowed_tool_ids:
+                    # Return a tool error message to the model
+                    lc_messages.append(ToolMessage(tool_call_id=call.get("id"), name=name or "unknown", args=args, content="{\"error\": \"invalid tool\"}"))
+                    continue
+                async with Client(self.mcp_url) as client:
+                    logger.debug(f"[{self.name}] calling tool tool_id={tool_id} args={args}")
+                    tc = await self._call_tool(client, tool_id, args)
+                tool_calls_acc.append(tc)
+                # Provide the (JSON) result back to the model as ToolMessage
+                import json as _json
+                content = _json.dumps(tc.get("output")) if tc.get("output") is not None else _json.dumps({"status": tc.get("status")})
+                lc_messages.append(ToolMessage(tool_call_id=call.get("id"), name=name, args=args, content=content))
+
+        final_text = ""
+        if lc_messages and isinstance(lc_messages[-1], AIMessage):
+            final_text = lc_messages[-1].content or ""
+        logger.debug(f"[{self.name}] final_response len={len(final_text)} tool_calls={len(tool_calls_acc)}")
+
+        return {"messages": lc_messages, "tool_calls": tool_calls_acc, "final_response": final_text}
 
     # ---- helpers ----------------------------------------------------
     def _normalize_tool_result(self, res: Any) -> Any:

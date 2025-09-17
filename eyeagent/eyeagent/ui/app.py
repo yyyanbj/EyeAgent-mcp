@@ -301,7 +301,7 @@ async def _run_and_stream(patient: Dict[str, Any], image_paths: List[str], progr
             except Exception:
                 pass
         if thumbs:
-            messages.append({"role": "system", "content": "<div style='margin-bottom:8px'><strong>Uploaded images:</strong><br>" + ''.join(thumbs) + "</div>"})
+            messages.append({"role": "user", "content": "<div style='margin-bottom:8px'>" + ''.join(thumbs) + "</div>"})
     if initial_messages:
         # Only keep safe roles and string content
         for m in initial_messages:
@@ -488,6 +488,9 @@ def build_interface() -> gr.Blocks:
                 image_uploader = gr.File(label="Upload images", file_count="multiple", type="filepath")
                 instruction = gr.Textbox(label="Instruction (optional)", placeholder="Describe specific goals or notes…")
 
+            # Show original uploaded images in a gallery
+            image_gallery = gr.Gallery(label="Original Images", columns=[3], height=240)
+
             show_patient = gr.Checkbox(label="Show Patient Info", value=False)
             with gr.Accordion("Patient Info", open=False, visible=False) as patient_section:
                 with gr.Row():
@@ -497,8 +500,8 @@ def build_interface() -> gr.Blocks:
 
             run_btn = gr.Button("Run Diagnosis", variant="primary")
             chatbot = gr.Chatbot(label="Live Multi-Agent Trace", type="messages")
-            # Simplified presets: checkbox group + auto-fill instruction
-            preset_checks = gr.CheckboxGroup(label="Instruction Presets", choices=[], interactive=True)
+            # Preset dropdown (single-select) that fills the Quick Insert field (does not send to chat)
+            preset_dropdown = gr.Dropdown(label="Instruction Presets", choices=[], interactive=True)
             # Quick inline input to inject a line into the instruction/chat without using the dropdown
             quick_input = gr.Textbox(label="Quick Insert", placeholder="Type here and press Enter to insert into instruction & trace", lines=1)
             chat_state = gr.State([])  # holds current chat messages (list of {role, content})
@@ -532,15 +535,9 @@ def build_interface() -> gr.Blocks:
                 default_instr = cfg.get("default_instruction") or ""
                 return gr.update(choices=presets), default_instr
 
-            def on_presets_change(cur_text: str, selected: List[str], msgs: List[Dict[str, str]]):
-                # Auto-fill instruction with selected presets joined by newlines
-                selected = selected or []
-                new_text = "\n".join(selected)
-                new_msgs = list(msgs or [])
-                # Append a single user message summarizing the selected presets
-                if selected:
-                    new_msgs.append({"role": "user", "content": new_text})
-                return new_text, new_msgs
+            def on_presets_select(selected: str):
+                # Auto-fill Quick Insert with the selected preset; do not touch chat or instruction
+                return selected or ""
 
             def quick_insert(cur_text: str, quick_text: str, msgs: List[Dict[str, str]]):
                 # Reuse the same logic as use_preset but with quick_text
@@ -554,11 +551,17 @@ def build_interface() -> gr.Blocks:
                 new_msgs.append({"role": "user", "content": quick_text})
                 return new_instr, new_msgs, new_msgs, ""
 
-            demo.load(load_presets, inputs=None, outputs=[preset_checks, instruction])
-            preset_checks.change(on_presets_change, inputs=[instruction, preset_checks, chat_state], outputs=[instruction, chatbot])
+            demo.load(load_presets, inputs=None, outputs=[preset_dropdown, instruction])
+            preset_dropdown.change(on_presets_select, inputs=[preset_dropdown], outputs=[quick_input])
             quick_input.submit(quick_insert, inputs=[instruction, quick_input, chat_state], outputs=[instruction, chatbot, chat_state, quick_input])
 
             run_btn.click(on_run, inputs=[image_uploader, instruction, show_patient, patient_id, patient_age, patient_gender, chat_state], outputs=[chatbot, final_json, chat_state])
+
+            # Wire image uploader to gallery preview
+            def update_gallery(files: List[str]):
+                return files or []
+
+            image_uploader.change(update_gallery, inputs=[image_uploader], outputs=[image_gallery])
 
         with gr.Tab("Replay Cases"):
             cases_dir = gr.Textbox(label="Cases Directory", value=str(_find_cases_dir()), interactive=True)

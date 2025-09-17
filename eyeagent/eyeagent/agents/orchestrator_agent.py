@@ -1,7 +1,9 @@
 from typing import Any, Dict, List
 from .diagnostic_base_agent import DiagnosticBaseAgent
+from .registry import register_agent
 from fastmcp import Client
 
+@register_agent
 class OrchestratorAgent(DiagnosticBaseAgent):
     role = "orchestrator"
     name = "OrchestratorAgent"
@@ -10,6 +12,15 @@ class OrchestratorAgent(DiagnosticBaseAgent):
         "You are the orchestrator. Tasks: (1) infer imaging modality, (2) classify laterality, (3) plan downstream pipeline. "
         "Always provide reasoning."
     )
+
+    # Capabilities declaration for orchestrator
+    capabilities = {
+        "required_context": ["images", "patient"],
+        "expected_outputs": ["pipeline", "modality_results", "laterality_results"],
+        "retry_policy": {"max_attempts": 2, "on_fail": "skip"},
+        "modalities": ["CFP", "OCT", "FFA"],
+        "tools": allowed_tool_ids,
+    }
 
     async def a_run(self, context: Dict[str, Any]) -> Dict[str, Any]:
         images = context.get("images", [])

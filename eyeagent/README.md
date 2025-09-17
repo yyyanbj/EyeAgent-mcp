@@ -69,6 +69,71 @@ uv run python run_multiagent.py
 
 The Gradio interface will be available at `http://localhost:7860`.
 
+## Configuration & Debugging
+
+Environment knobs (set in shell or .env):
+
+- EYEAGENT_LOG_LEVEL: Log level (DEBUG/INFO/WARNING/ERROR). Example: `EYEAGENT_LOG_LEVEL=DEBUG` for verbose traces.
+- EYEAGENT_LOG_FILE: Optional path to write logs (daily rotation, 7 days retention). Example: `/tmp/eyeagent.log`.
+- EYEAGENT_LOG_FORMAT: Optional custom loguru format string.
+- EYEAGENT_MCP_ADAPTER_BIND: `1` to bind tools using official `langchain-mcp-adapters`; `0` (default) uses internal wrappers.
+- EYEAGENT_USE_LANGGRAPH: `1` to use LangGraph-based execution; `0` (default) uses a simple fallback runner.
+- EYEAGENT_PIPELINE: Optional comma-separated override to bypass Orchestrator and run a static pipeline using the Agent Registry. Example:
+   - `EYEAGENT_PIPELINE=image_analysis,specialist,follow_up,report`
+
+Tips when `EYEAGENT_LOG_LEVEL=DEBUG`:
+- You will see per-step LLM invocation metadata (model, tokens limit, message counts) and tool loop steps.
+- Tool execution includes the resolved tool_id and arguments, and the final response length.
+
+## Agent Registry & Extensibility
+
+We introduced an Agent Registry that lets you add new roles with minimal wiring.
+
+- File: `eyeagent/agents/registry.py`
+   - `@register_agent` decorator registers by both role and class name.
+   - `get_agent_class(key)` resolves a class by role or name.
+   - `list_agents()` lists registered keys.
+   - `register_builtins()` registers core agents.
+
+How to add a new Agent:
+
+```python
+from .diagnostic_base_agent import DiagnosticBaseAgent
+from .registry import register_agent
+
+@register_agent
+class TriageAgent(DiagnosticBaseAgent):
+      role = "triage"
+      name = "TriageAgent"
+      allowed_tool_ids = ["classification:modality"]
+      system_prompt = "You are a triage agent..."
+
+      async def a_run(self, context):
+            # plan tools and call them, or use run_with_bound_tools()
+            plan = await self.plan_tools("Quick triage", self.allowed_tool_ids)
+            # ... call tools and return outputs per base contract
+            return {"agent": self.name, "role": self.role, "outputs": {}, "tool_calls": [], "reasoning": "..."}
+```
+
+Static pipeline override uses the registry (bypasses Orchestrator):
+
+```bash
+EYEAGENT_PIPELINE=image_analysis,specialist,follow_up,report
+```
+
+## MCP Adapters
+
+To allow LLM-native tool calling, set `EYEAGENT_MCP_ADAPTER_BIND=1`.
+- We load MCP tools using `langchain-mcp-adapters` and bind them to the LLM.
+- Execution still goes through our MCP client and Trace logger, preserving auditing and JSON normalization.
+- A robust name mapping keeps the LLM-facing tool names and internal `tool_id` consistent in traces.
+
+## Logging
+
+Centralized `setup_logging()` configuration in `eyeagent/core/logging.py`.
+- Defaults to INFO; set `EYEAGENT_LOG_LEVEL=DEBUG` for deep traces of model calls, tool binding/execution, and workflow transitions.
+- Optional file sink with rotation via `EYEAGENT_LOG_FILE`.
+
 ## How it Works
 
 ### 🔄 **Agent Workflow with Loguru Logging**
@@ -253,3 +318,13 @@ In `tools/tool_registry.py`, add entries such as:
 - Graph optimizations with more parallelism
 
 ---
+
+## Metrics (experimental)
+
+We include a minimal Prometheus metrics skeleton that is automatically used when `prometheus_client` is installed:
+
+- LLM tokens: `eyeagent_llm_tokens{agent,phase}` where phase ∈ {prompt, completion, total}
+- Tool latency: `eyeagent_tool_latency_seconds{tool_id,status}` with status ∈ {success, error}
+- Step latency: `eyeagent_step_latency_seconds{agent,role}` timing each agent step
+
+Metrics export is not started by default. Integrate with your host application by exposing the default registry, for example using `prometheus_client.start_http_server(port)` early in your process. If the library is not installed, metrics calls are no-ops.

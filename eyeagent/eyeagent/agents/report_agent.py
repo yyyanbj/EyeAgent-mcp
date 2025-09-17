@@ -1,6 +1,8 @@
 from typing import Any, Dict, List
 from .diagnostic_base_agent import DiagnosticBaseAgent
+from .registry import register_agent
 
+@register_agent
 class ReportAgent(DiagnosticBaseAgent):
     role = "report"
     name = "ReportAgent"
@@ -9,6 +11,15 @@ class ReportAgent(DiagnosticBaseAgent):
         "You are the report agent. Consolidate all intermediate results into the final JSON report fragment including diagnoses, lesions, management, and reasoning."
         " Explicitly state any missing information."
     )
+
+    # Capabilities declaration for report
+    capabilities = {
+        "required_context": ["image_analysis", "specialist", "follow_up"],
+        "expected_outputs": ["diagnoses", "lesions", "management", "reasoning", "narrative", "conclusion"],
+        "retry_policy": {"max_attempts": 1, "on_fail": "fail"},
+        "modalities": ["CFP", "OCT", "FFA"],
+        "tools": [],
+    }
 
     async def a_run(self, context: Dict[str, Any]) -> Dict[str, Any]:
         image_analysis = context.get("image_analysis", {})
@@ -44,7 +55,7 @@ class ReportAgent(DiagnosticBaseAgent):
             narrative_parts.append(str(ia_narr))
         if sp_narr:
             narrative_parts.append(str(sp_narr))
-        # Compose final summary paragraph and conclusion
+        # Compose final summary paragraph and conclusion, then polish via LLM
         final_sentence = []
         if diag_txt:
             final_sentence.append(f"Final impression: {diag_txt}.")
@@ -52,7 +63,8 @@ class ReportAgent(DiagnosticBaseAgent):
             final_sentence.append(f"Suggested management: {mgmt_txt}.")
         if fu_narr:
             final_sentence.append(str(fu_narr))
-        reasoning = " ".join(final_sentence) or "Consolidated findings into a final report."
+        base_reasoning = " ".join(final_sentence) or "Consolidated findings into a final report."
+        reasoning = self.gen_reasoning(base_reasoning)
         # Conclusion: primary diagnosis line with management if available
         conclusion = None
         if diag_txt and mgmt_txt:

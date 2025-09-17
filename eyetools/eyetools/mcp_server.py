@@ -10,7 +10,7 @@ from __future__ import annotations
 from fastapi import FastAPI, HTTPException, Query
 from pydantic import BaseModel
 from typing import List, Optional, Any, Dict, Callable
-import os, json
+import os, json, logging
 from pathlib import Path
 
 from .core.registry import ToolRegistry
@@ -31,6 +31,76 @@ class PredictRequest(BaseModel):
     request: Dict[str, Any] = {}
     role: Optional[str] = None
 
+
+def _configure_external_logging():
+    """Configure logging for FastAPI/Uvicorn and FastMCP to DEBUG with unified format.
+
+    Env overrides:
+      EYETOOLS_LOG_FORMAT: custom format string
+      EYETOOLS_CONFIGURE_EXTERNAL_LOGGING: set to '0' to skip
+    """
+    if os.getenv("EYETOOLS_CONFIGURE_EXTERNAL_LOGGING", "1") == "0":
+        return
+    fmt = os.getenv("EYETOOLS_LOG_FORMAT", "%(asctime)s %(levelname)s [%(name)s] %(message)s")
+    formatter = logging.Formatter(fmt)
+
+    # Try to reuse eyetools.core logger's handlers if available to keep outputs consistent
+    base_handlers = list(core_logger.handlers)
+    target_loggers = [
+        # Framework
+        "fastapi",
+        "starlette",
+        # Uvicorn family
+        "uvicorn",
+        "uvicorn.error",
+        "uvicorn.access",
+        "uvicorn.asgi",
+        # FastMCP and friends
+        "fastmcp",
+        "mcp",
+        # Useful libraries often used by servers
+        "anyio",
+        "httpx",
+    ]
+
+    for name in target_loggers:
+        logger = logging.getLogger(name)
+        try:
+            logger.setLevel(logging.DEBUG)
+            # If logger already has handlers (e.g., when running under uvicorn), update their formats
+            if logger.handlers:
+                for h in logger.handlers:
+                    try:
+                        h.setFormatter(formatter)
+                    except Exception:  # pragma: no cover - defensive
+                        pass
+            else:
+                # Attach either a cloned eyetools handler or a fresh stream handler
+                if base_handlers:
+                    for h in base_handlers:
+                        # Clone by creating a new handler of same type when possible
+                        try:
+                            if isinstance(h, logging.StreamHandler):
+                                nh = logging.StreamHandler()
+                            elif isinstance(h, logging.FileHandler):
+                                # Reuse same file path if present
+                                nh = logging.FileHandler(h.baseFilename, encoding=getattr(h, "encoding", "utf-8"))
+                            else:
+                                nh = logging.StreamHandler()
+                            nh.setFormatter(formatter)
+                            logger.addHandler(nh)
+                        except Exception:  # pragma: no cover - defensive
+                            sh = logging.StreamHandler()
+                            sh.setFormatter(formatter)
+                            logger.addHandler(sh)
+                else:
+                    sh = logging.StreamHandler()
+                    sh.setFormatter(formatter)
+                    logger.addHandler(sh)
+            # Avoid double logging to root when we already manage handlers
+            logger.propagate = False
+        except Exception:  # pragma: no cover - defensive
+            pass
 
 def _load_role_config(role_config_path: Optional[str]) -> Dict[str, Any]:
     if role_config_path and Path(role_config_path).exists():
@@ -83,6 +153,8 @@ def create_app(
     # Revert default back to root for backward compatibility; can override via param or EYETOOLS_MCP_MOUNT_PATH env.
     mcp_mount_path: str = "/",
 ):
+    # Ensure consistent DEBUG-level logging and format for FastAPI/FastMCP and friends
+    _configure_external_logging()
     # Allow environment variable to override mount path regardless of default/argument
     mount_env = os.getenv("EYETOOLS_MCP_MOUNT_PATH")
     if mount_env:
