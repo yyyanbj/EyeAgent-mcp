@@ -104,6 +104,12 @@ def _load_predictor(model_id: int, weights_root: Path):
     from nnunetv2.inference.predict_from_raw_data import nnUNetPredictor
     from nnunetv2.utilities.file_path_utilities import convert_trainer_plans_config_to_identifier
 
+    # best-effort environment hints for nnUNet
+    import os as _os
+    _os.environ.setdefault("nnUNet_raw", str(weights_root))
+    _os.environ.setdefault("nnUNet_preprocessed", str(weights_root))
+    _os.environ.setdefault("nnUNet_results", str(weights_root))
+
     predictor = nnUNetPredictor(
         tile_step_size=0.5,
         use_gaussian=True,
@@ -178,6 +184,8 @@ class SegmentationTool(ToolBase):
         self.temp_dir = Path(params.get("base_path", "temp/segmentation")) / self.task
         self.weights_root = Path(params.get("weights_root", "weights/segmentation"))
         self.min_object_size = int(params.get("min_object_size", 1))
+        # If False, raise an error when no real segmentation is produced (no synthetic fallback)
+        self.allow_fallback = bool(params.get("allow_fallback", False))
         # optional offset if weight directory numbering differs from internal mapping
         self.model_id_offset = int(params.get("model_id_offset", 0))
         self.predictor = None
@@ -305,71 +313,108 @@ class SegmentationTool(ToolBase):
         image_path = str(image_path)
         if not Path(image_path).exists():
             raise FileNotFoundError(f"Image not found: {image_path}")
+        # ensure model
         self.ensure_model_loaded()
-        file_name = Path(image_path).name
-        # copy image
-        dst = self.temp_dir / "images" / file_name
+        # prepare dirs
+        self.prepare()
+        images_dir = self.temp_dir / "images"
+        pred_dir = self.temp_dir / "pred"
+        # clean old predictions to avoid stale picks
+        for pattern in ('*.png', '*.nii', '*.nii.gz'):
+            for old in pred_dir.glob(pattern):
+                try:
+                    old.unlink()
+                except Exception:
+                    pass
+        # copy image into workspace
+        dst = images_dir / Path(image_path).name
         try:
             import shutil
             shutil.copy(image_path, dst)
         except Exception:
-            pass
+            dst = Path(image_path)
         start = time.time()
-        # run predictor sequential
-        result = self.predictor.predict_from_files_sequential(
-            [[str(dst)]],
-            str(self.temp_dir / "pred"),
-            False,
-            True,
-            None,
-        )
-        # load seg
-        pred_dir = self.temp_dir / "pred"
-        seg_path = pred_dir / f"{Path(image_path).stem}.png"
-        import cv2 as _cv2, os as _os
-        seg = _cv2.imread(str(seg_path), _cv2.IMREAD_GRAYSCALE)
+        # run predictor
+        try:
+            self.predictor.predict_from_files_sequential(
+                [[str(dst)]],
+                str(pred_dir),
+                False,
+                True,
+                None,
+            )
+        except Exception:
+            # swallow and try to detect outputs; inference may still have produced artifacts
+            pass
+        # locate segmentation result
+        stem = Path(image_path).stem
+        seg_path = pred_dir / f"{stem}.png"
+        seg = None
+        if seg_path.exists():
+            seg = cv2.imread(str(seg_path), cv2.IMREAD_GRAYSCALE)
+        # any fresh PNG (ignore synthetic) produced after start
         if seg is None:
-            # Attempt fallback: if only one png exists in pred_dir, use it
-            pngs = list(pred_dir.glob('*.png'))
-            if len(pngs) == 1:
-                seg_path = pngs[0]
-                seg = _cv2.imread(str(seg_path), _cv2.IMREAD_GRAYSCALE)
+            pngs = [p for p in pred_dir.rglob('*.png') if not p.name.endswith('_synthetic.png') and p.stat().st_mtime >= (start - 1.0)]
+            if pngs:
+                pngs.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+                preferred = [p for p in pngs if stem in p.stem]
+                candidate = preferred[0] if preferred else pngs[0]
+                seg = cv2.imread(str(candidate), cv2.IMREAD_GRAYSCALE)
+                seg_path = candidate
+        # try nii.gz -> png conversion
+        if seg is None:
+            niis = [p for p in pred_dir.rglob('*.nii.gz') if p.stat().st_mtime >= (start - 1.0)]
+            if niis:
+                try:
+                    import nibabel as nib  # type: ignore
+                    nii = nib.load(str(niis[0]))
+                    data = nii.get_fdata().astype('uint8').squeeze()
+                    seg_path = pred_dir / f"{niis[0].stem}.png"
+                    cv2.imwrite(str(seg_path), data)
+                    seg = data
+                except Exception:
+                    seg = None
+        warning_msg: Optional[str] = None
+        if seg is None:
+            if not self.allow_fallback:
+                listing = [str(p.relative_to(pred_dir)) for p in pred_dir.rglob('*')]
+                raise RuntimeError(
+                    "Segmentation output missing; real inference required. "
+                    f"Tried: {Path(image_path).stem}.png / *.png / *.nii.gz under {pred_dir}. "
+                    f"Please verify weights for model_id={self.model_id} exist under {self.weights_root} and nnUNet ran successfully. "
+                    f"Current pred dir listing: {listing}"
+                )
+            # fallback synthetic mask
+            src = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
+            if src is not None:
+                h, w = src.shape[:2]
+                yy, xx = np.ogrid[:h, :w]
+                cy, cx = h // 2, w // 2
+                r = max(4, min(h, w) // 6)
+                seg = (((yy - cy) ** 2 + (xx - cx) ** 2) <= r * r).astype('uint8') * 255
+                seg_path = pred_dir / f"{stem}_synthetic.png"
+                cv2.imwrite(str(seg_path), seg)
+                warning_msg = "Segmentation output missing. Generated synthetic mask."
             else:
-                # Try nii.gz
-                niis = list(pred_dir.glob('*.nii.gz'))
-                if niis:
-                    try:
-                        import nibabel as nib
-                        nii = nib.load(str(niis[0]))
-                        data = nii.get_fdata().astype('uint8')
-                        seg = data.squeeze()
-                        # Save a png for downstream steps
-                        _cv2.imwrite(str(pred_dir / (niis[0].stem + '.png')), seg)
-                        seg_path = pred_dir / (niis[0].stem + '.png')
-                    except Exception as e:  # pragma: no cover
-                        pass
-        if seg is None:
-            listing = [p.name for p in pred_dir.glob('*')]
-            raise RuntimeError(f"Segmentation output missing. Expected {seg_path.name}. Dir listing={listing}")
-        # Normalize binary-like masks (0,255) to {0,1}
+                raise RuntimeError("Segmentation output missing and source image unreadable.")
+        # at this point seg is a 2D array
         uniques = np.unique(seg)
         if set(uniques.tolist()) <= {0, 255}:
             seg = (seg > 0).astype(np.uint8)
-        orig = _cv2.imread(image_path)
+        orig = cv2.imread(image_path)
         h, w = orig.shape[:2]
-        seg = _cv2.resize(seg, (w, h), interpolation=_cv2.INTER_NEAREST)
+        seg = cv2.resize(seg, (w, h), interpolation=cv2.INTER_NEAREST)
         colorized, stats = _colorize(seg, self.lesions, self.min_object_size)
         merged = np.hstack([orig, colorized])
-        out_name = f"{Path(image_path).stem}_{Path(image_path).suffix}"
-        _cv2.imwrite(str(self.temp_dir / "merge" / out_name), merged)
-        _cv2.imwrite(str(self.temp_dir / "rgb" / out_name), colorized)
-        # overlay: zero out seg>0
+        out_name = Path(image_path).name
+        cv2.imwrite(str(self.temp_dir / "merge" / out_name), merged)
+        cv2.imwrite(str(self.temp_dir / "rgb" / out_name), colorized)
         overlay = orig.copy()
         overlay[seg > 0] = 0
-        overlay = _cv2.addWeighted(overlay, 1, colorized, 1, 0)
-        _cv2.imwrite(str(self.temp_dir / "overlay" / out_name), overlay)
+        overlay = cv2.addWeighted(overlay, 1, colorized, 1, 0)
+        cv2.imwrite(str(self.temp_dir / "overlay" / out_name), overlay)
         latency = time.time() - start
-        return {
+        result_obj = {
             "task": self.task,
             **stats,
             "output_paths": {
@@ -379,6 +424,9 @@ class SegmentationTool(ToolBase):
             },
             "inference_time": round(latency, 3),
         }
+        if warning_msg:
+            result_obj["warning"] = warning_msg
+        return result_obj
 
 
 def load_tool(task: str, **kw):

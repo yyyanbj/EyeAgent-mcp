@@ -145,25 +145,58 @@ def create_app(
         param_styles: Dict[str, str] = {}
 
         def build_input_schema(meta) -> Dict[str, Any]:
+            """Derive a JSON schema for tool inputs.
+
+            Preference order:
+            - io.input_schema (explicit schema defined by tool config)
+            - io.input (legacy key)
+            - else: best-effort object schema with no fixed properties
+            """
             if isinstance(meta.io, dict):
+                # Prefer explicit input_schema if provided by config
+                if isinstance(meta.io.get("input_schema"), dict):
+                    sch = meta.io["input_schema"]
+                    # Normalize to a proper JSON schema object if needed
+                    if isinstance(sch, dict) and "type" not in sch:
+                        # Interpret as shorthand props map {name: type}
+                        props = {}
+                        for k, v in sch.items():
+                            if isinstance(v, str):
+                                # minimal mapping of custom types to JSON Schema
+                                tmap = {
+                                    "string": "string",
+                                    "path": "string",
+                                    "number": "number",
+                                    "integer": "integer",
+                                    "float": "number",
+                                    "bool": "boolean",
+                                    "boolean": "boolean",
+                                    "object": "object",
+                                    "array": "array",
+                                }
+                                props[k] = {"type": tmap.get(v, "string")}
+                            else:
+                                props[k] = v if isinstance(v, dict) else {"type": "string"}
+                        return {"type": "object", "properties": props, "additionalProperties": True}
+                    return sch
+                # Legacy key support
                 if isinstance(meta.io.get("input"), dict):
                     return meta.io["input"]
-                props = {k: {"type": "string"} for k in meta.io.keys() if k not in {"batchable", "input"}}
-                if props:
-                    return {"type": "object", "properties": props, "additionalProperties": True}
             return {"type": "object", "properties": {}, "additionalProperties": True}
 
         def extract_param_names(input_schema: Dict[str, Any], meta) -> List[str]:
+            """Extract parameter names for explicit wrapper.
+
+            Use object property names from the resolved input_schema when available.
+            Avoid leaking meta.io keys like 'input_schema'/'output_schema' into the signature.
+            """
             names: List[str] = []
-            if input_schema.get("type") == "object":
+            if isinstance(input_schema, dict) and input_schema.get("type") == "object":
                 props = input_schema.get("properties", {})
                 if isinstance(props, dict):
-                    names.extend(props.keys())
-            if not names and isinstance(meta.io, dict):
-                for k in meta.io.keys():
-                    if k not in {"batchable", "input"}:
-                        names.append(k)
-            return list(dict.fromkeys(names))  # de-dup preserve order
+                    names.extend([k for k in props.keys()])
+            # Fallback: no explicit params
+            return list(dict.fromkeys(names))
 
         def register_single(meta):  # noqa: C901 complexity acceptable here
             tool_id = meta.id

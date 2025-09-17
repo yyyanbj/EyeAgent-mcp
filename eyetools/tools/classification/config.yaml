@@ -10,7 +10,7 @@ shared:
     preload: false
   io:
     input_schema:
-      image: path
+      image_path: path
     output_schema:
       predictions: list
   model_defaults:
