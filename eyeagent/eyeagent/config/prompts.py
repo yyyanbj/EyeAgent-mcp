@@ -50,19 +50,32 @@ class PromptsConfig:
         cases_dir = Path(t.base_dir)
         repo_root = cases_dir.parent if cases_dir.name == "cases" else Path.cwd()
         base = Path(base_dir) if base_dir else repo_root
-        self.config_dir = Path(os.getenv("EYEAGENT_CONFIG_DIR", base / "config"))
+        # Prefer eyeagent/config; fallback to repo_root/config
+        default_cfg_dir = base / "eyeagent" / "config"
+        legacy_cfg_dir = base / "config"
+        self.config_dir = Path(os.getenv("EYEAGENT_CONFIG_DIR", str(default_cfg_dir if default_cfg_dir.exists() else legacy_cfg_dir)))
         self.config_dir.mkdir(parents=True, exist_ok=True)
-        self.file_path = self.config_dir / "prompts.yml"
+        # Allow overriding via EYEAGENT_PROMPTS_FILE and support JSON
+        env_file = os.getenv("EYEAGENT_PROMPTS_FILE")
+        if env_file:
+            self.file_path = Path(env_file)
+        else:
+            self.file_path = self.config_dir / "prompts.yml"
 
     def load(self) -> Dict[str, Any]:
+        data: Dict[str, Any] = {}
         if self.file_path.exists():
             try:
-                with open(self.file_path, "r", encoding="utf-8") as f:
-                    data = yaml.safe_load(f) or {}
+                text = self.file_path.read_text(encoding="utf-8")
+                if self.file_path.suffix.lower() in (".yml", ".yaml"):
+                    data = yaml.safe_load(text) or {}
+                elif self.file_path.suffix.lower() == ".json":
+                    import json as _json
+                    data = _json.loads(text) or {}
+                else:
+                    data = yaml.safe_load(text) or {}
             except Exception:
                 data = {}
-        else:
-            data = {}
         # deep-merge defaults
         return _deep_merge(DEFAULT_PROMPTS, data)
 

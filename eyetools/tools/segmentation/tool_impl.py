@@ -193,6 +193,48 @@ class SegmentationTool(ToolBase):
         self.model_id: Optional[int] = None
         self.model_loaded = False
 
+    @staticmethod
+    def describe_outputs(meta: Dict[str, Any], params: Dict[str, Any]) -> Dict[str, Any]:
+        """Static description of segmentation outputs for the given task.
+
+        Returns label names and structure of counts/areas without loading the model.
+        """
+        task = (params or {}).get("task") or (meta.get("params", {}) or {}).get("task")
+        # mirror label names used in _get_config without importing heavy deps
+        labels_map = {
+            "cfp_DR": ["MA", "HE", "EX", "CWS"],
+            "cfp_laserscar": ["laser scar"],
+            "cfp_laserspots": ["laser spots"],
+            "cfp_atrophy": ["atrophy"],
+            "cfp_drusen": ["drusen"],
+            "cfp_scar": ["scar"],
+            "cfp_cnv": ["CNV"],
+            "cfp_rd": ["RD"],
+            "cfp_mh": ["mh"],
+            "cfp_membrane": ["membrane"],
+            "cfp_edema": ["edema"],
+            "cfp_artifact": ["artifact"],
+            "oct_layer": [
+                "optic disc","RNFL","GCL","IPL","INL","OPL","ONL","ELM","ISOS","RPE","choroidal","chostro","fovea"
+            ],
+            "oct_PMchovefosclera": ["fovea", "choroidal", "chostro", "sclera"],
+            "oct_lesion": ["MH", "fluid", "PED"],
+            "ffa_lesion": [
+                "block","CNV","leakage","edema","WD","staining","disc","NPA","NV","laser","hypofluorescence","macula","MA"
+            ],
+        }
+        labels = labels_map.get(task, [])
+        return {
+            "schema": (meta.get("io") or {}).get("output_schema", {}),
+            "fields": {
+                "counts": "map label -> count of connected components",
+                "areas": "map label -> list of component areas in pixels^2",
+                "output_paths": "generated visualization paths",
+                "inference_time": "seconds",
+            },
+            "labels": labels,
+        }
+
     def prepare(self):  # lightweight
         # create dirs
         for sub in ("images", "pred", "rgb", "merge", "overlay"):

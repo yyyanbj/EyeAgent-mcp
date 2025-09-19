@@ -29,10 +29,14 @@ def load_pipelines_config() -> Dict[str, Any]:
     env_path = os.getenv("EYEAGENT_PIPELINES_FILE")
     if env_path:
         candidates.append(env_path)
-    # repo-relative defaults
+    # repo-relative defaults: prefer eyeagent/config then legacy config/
     repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-    candidates.append(os.path.join(repo_root, "config", "pipelines.yml"))
-    candidates.append(os.path.join(repo_root, "config", "pipelines.json"))
+    eye_cfg = os.path.join(repo_root, "eyeagent", "config")
+    legacy_cfg = os.path.join(repo_root, "config")
+    candidates.append(os.path.join(eye_cfg, "pipelines.yml"))
+    candidates.append(os.path.join(eye_cfg, "pipelines.json"))
+    candidates.append(os.path.join(legacy_cfg, "pipelines.yml"))
+    candidates.append(os.path.join(legacy_cfg, "pipelines.json"))
 
     for p in candidates:
         if not os.path.isfile(p):

@@ -150,6 +150,24 @@ class ToolManager:
         self._lifecycle[meta.id] = "LOADED"
         return inst
 
+    # Lightweight metadata hook: ask tool class to describe outputs without loading models
+    def get_output_details(self, tool_id: str) -> dict | None:
+        meta = self.registry.get(tool_id)
+        if not meta:
+            return None
+        try:
+            ToolCls = self._import_entry(meta)
+        except Exception:
+            return None
+        try:
+            # Prefer classmethod/staticmethod 'describe_outputs(meta, params)'
+            if hasattr(ToolCls, "describe_outputs"):
+                fn = getattr(ToolCls, "describe_outputs")
+                return fn(meta.__dict__, meta.params)  # type: ignore[misc]
+        except Exception:
+            return None
+        return None
+
     def predict(self, tool_id: str, request: Dict[str, Any]):
         meta = self.registry.get(tool_id)
         if not meta:

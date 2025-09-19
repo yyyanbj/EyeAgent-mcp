@@ -2,9 +2,13 @@
 
 Provides:
 - TOOL_REGISTRY: dictionary of tool metadata keyed by tool_id (same as MCP name where possible)
+- Optional YAML/JSON overlay from config (EYEAGENT_TOOLS_FILE or config/tools.yml) to extend/override metadata
 - Query helpers by role/modality/disease
 """
 from typing import Dict, Any, List, Optional
+import os
+import json
+from loguru import logger
 
 # Tool IDs match MCP tool names for simplicity
 TOOL_REGISTRY: Dict[str, Dict[str, Any]] = {
@@ -251,6 +255,97 @@ TOOL_REGISTRY: Dict[str, Dict[str, Any]] = {
         "disease_specific_cls:viral_retinitis_finetune",
     ]}
 }
+
+
+def _deep_merge(a: Dict[str, Any], b: Dict[str, Any]) -> Dict[str, Any]:
+    out = dict(a)
+    for k, v in (b or {}).items():
+        if isinstance(v, dict) and isinstance(out.get(k), dict):
+            out[k] = _deep_merge(out[k], v)
+        else:
+            out[k] = v
+    return out
+
+
+def _load_tools_config() -> Dict[str, Any]:
+    """Load external tools config from YAML/JSON.
+
+    Search order:
+    1) EYEAGENT_TOOLS_FILE
+    2) repo_root/config/tools.yml
+    3) repo_root/config/tools.json
+    """
+    # Determine repo root similar to other configs
+    try:
+        from ..tracing.trace_logger import TraceLogger  # type: ignore
+        t = TraceLogger()
+        base_dir = os.path.abspath(os.path.join(t.base_dir, os.pardir))
+    except Exception:
+        base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+
+    candidates: List[str] = []
+    env_path = os.getenv("EYEAGENT_TOOLS_FILE")
+    if env_path:
+        candidates.append(env_path)
+    candidates.append(os.path.join(base_dir, "config", "tools.yml"))
+    candidates.append(os.path.join(base_dir, "config", "tools.yaml"))
+    candidates.append(os.path.join(base_dir, "config", "tools.json"))
+
+    try:
+        import yaml  # type: ignore
+        has_yaml = True
+    except Exception:
+        yaml = None  # type: ignore
+        has_yaml = False
+
+    for p in candidates:
+        if not os.path.isfile(p):
+            continue
+        try:
+            with open(p, "r", encoding="utf-8") as f:
+                text = f.read()
+            if p.endswith(".yml") or p.endswith(".yaml"):
+                if not has_yaml:
+                    logger.warning("tools file is YAML but PyYAML not installed; skipping %s", p)
+                    continue
+                data = yaml.safe_load(text) or {}
+            else:
+                data = json.loads(text)
+            if isinstance(data, dict):
+                # Expected shape: { tool_id: {meta...}, ... }
+                return data
+        except Exception as e:
+            logger.warning(f"failed to load tools config from {p}: {e}")
+    return {}
+
+
+def _apply_tools_overlay():
+    """Merge external tools config into TOOL_REGISTRY (non-destructive)."""
+    overlay = _load_tools_config()
+    if not overlay:
+        return
+    updates = 0
+    adds = 0
+    for tool_id, meta in overlay.items():
+        if not isinstance(meta, dict):
+            continue
+        if tool_id in TOOL_REGISTRY:
+            TOOL_REGISTRY[tool_id] = _deep_merge(TOOL_REGISTRY[tool_id], meta)
+            updates += 1
+        else:
+            # Provide sensible defaults
+            meta = {**meta}
+            meta.setdefault("mcp_name", tool_id)
+            if not meta.get("role"):
+                logger.warning(f"tools overlay: new tool '{tool_id}' missing 'role'; please specify 'role' (orchestrator/image_analysis/specialist/follow_up)")
+            TOOL_REGISTRY[tool_id] = meta
+            adds += 1
+    if updates or adds:
+        logger.debug(f"[tools] applied overlay: updates={updates} adds={adds}")
+
+
+# Apply overlay at import time to keep call-sites unchanged
+_apply_tools_overlay()
 
 
 def list_tools(role: Optional[str] = None) -> List[Dict[str, Any]]:

@@ -10,6 +10,7 @@ nav:
     - Overview: eyeagent/index.md
     - Quick Start: eyeagent/quickstart.md
     - Architecture: eyeagent/architecture.md
+    - Configuration: eyeagent/config.md
   - EyeTools:
     - Overview: eyetools/index.md
     - Quick Start: eyetools/quickstart.md

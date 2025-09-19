@@ -115,6 +115,52 @@ class DiseaseSpecificClassificationTool:
         self.disease_name = _disease_from_variant(self.variant)
         self._loaded = False
 
+    @staticmethod
+    def describe_outputs(meta: Dict[str, Any], params: Dict[str, Any]) -> Dict[str, Any]:
+        """Return a static description of outputs for this disease-specific variant.
+
+        - Does not load model weights.
+        - Reads label.txt if present to list class names; otherwise provides a
+          best-effort default based on the variant name.
+        """
+        variant = (params or {}).get("variant") or meta.get("variant")
+        disease_name = _disease_from_variant(variant) if variant else None
+        weights_root = (params or {}).get("weights_root", "weights/disease-specific")
+        classes: List[str] | None = None
+        if variant:
+            label_file = os.path.join(weights_root, variant, "label.txt")
+            if os.path.isfile(label_file):
+                try:
+                    with open(label_file, "r", encoding="utf-8") as lf:
+                        raw_lines = [l.strip() for l in lf.readlines() if l.strip()]
+                    if raw_lines and raw_lines[0].isdigit() and int(raw_lines[0]) == len(raw_lines) - 1:
+                        raw_lines = raw_lines[1:]
+                    parsed: List[str] = []
+                    for entry in raw_lines:
+                        part = entry.split(",") if "," in entry else entry.split("\t")
+                        if len(part) >= 1 and part[0].strip():
+                            parsed.append(part[0].strip())
+                    if parsed:
+                        classes = parsed
+                except Exception:
+                    classes = None
+        # Minimal fields/scheme description
+        out: Dict[str, Any] = {
+            "schema": (meta.get("io") or {}).get("output_schema", {}),
+            "fields": {
+                "disease": "disease name (derived from variant)",
+                "probability": "probability of positive class",
+                "predicted": "probability >= threshold",
+                "all_probabilities": "map of class -> probability",
+                "inference_time": "seconds",
+            },
+        }
+        if disease_name:
+            out["disease"] = disease_name
+        if classes:
+            out["classes"] = classes
+        return out
+
     # Compatibility with framework pattern
     def ensure_model_loaded(self):
         if not self._loaded:

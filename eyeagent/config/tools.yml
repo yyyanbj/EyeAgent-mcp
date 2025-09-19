@@ -1,0 +1,12 @@
+# Tool metadata overlay. Add new tools or override fields of existing ones.
+# Keys are tool_ids; values are partial or full metadata dicts.
+# Example override:
+# classification:cfp_quality:
+#   desc: "Higher-precision CFP quality model"
+#   version: "1.3.0"
+#   modalities: [CFP]
+#   args_schema:
+#     type: object
+#     properties:
+#       image_path: { type: string }
+#     required: [image_path]

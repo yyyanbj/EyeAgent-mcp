@@ -13,8 +13,8 @@ from dotenv import load_dotenv
 MCP_SERVER_URL = os.getenv("MCP_SERVER_URL", "http://localhost:8000/mcp/")
 CHAT_MODEL = os.getenv("AGENT_LLM_MODEL", "deepseek-chat")
 CHAT_BASE_URL = os.getenv("AGENT_LLM_BASE_URL", "https://api.deepseek.com/v1")
-CHAT_TEMPERATURE = float(os.getenv("AGENT_LLM_TEMPERATURE", "0.8"))
-MAX_TOKENS = int(os.getenv("AGENT_LLM_MAX_TOKENS", "4096"))
+CHAT_TEMPERATURE = float(os.getenv("AGENT_LLM_TEMPERATURE", "1.0"))
+MAX_TOKENS = int(os.getenv("AGENT_LLM_MAX_TOKENS", "64000"))
 
 # Directory for persisting conversations (created lazily)
 CONV_DIR = os.getenv("AGENT_CONV_DIR", os.path.join(os.path.dirname(__file__), "..", "ui", "conversations"))

@@ -32,7 +32,7 @@ class FollowUpAgent(DiagnosticBaseAgent):
 
         tool_calls = []
         age_info = None
-        async with Client(self.mcp_url) as client:
+        async with self._client_ctx() as client:
             for step in plan:
                 tool_id = step.get("tool_id")
                 if tool_id not in self.allowed_tool_ids:

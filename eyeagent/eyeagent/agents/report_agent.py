@@ -22,19 +22,26 @@ class ReportAgent(DiagnosticBaseAgent):
     }
 
     async def a_run(self, context: Dict[str, Any]) -> Dict[str, Any]:
-        image_analysis = context.get("image_analysis", {})
-        specialist = context.get("specialist", {})
-        follow_up = context.get("follow_up", {})
+        # Coerce possibly None fields (engine may map selective outputs only)
+        image_analysis = context.get("image_analysis") or {}
+        specialist = context.get("specialist") or {}
+        follow_up = context.get("follow_up") or {}
 
-        diagnoses = []
-        for dg in specialist.get("disease_grades", []):
+        # Prefer per-image specialist grading if available
+        per_sp = (specialist.get("per_image") or {}).get("disease_grades") or {}
+        flat_sp = specialist.get("disease_grades", [])
+        # Build diagnoses list (flattened for backward compatibility)
+        diagnoses: List[Dict[str, Any]] = []
+        for dg in flat_sp:
             diagnoses.append({
                 "disease": dg.get("disease"),
                 "grade": dg.get("grade"),
                 "confidence": dg.get("confidence"),
                 "evidence": []
             })
-        lesions = image_analysis.get("lesions")
+        # Lesions from IA per-image if present, else raw lesions
+        per_ia = (image_analysis.get("per_image") or {})
+        lesions = per_ia.get("lesions") if isinstance(per_ia, dict) and per_ia.get("lesions") is not None else image_analysis.get("lesions")
         management = follow_up.get("management")
         # Compose a narrative and explicit diagnostic conclusion
         diag_txt = ", ".join([f"{d.get('disease')} {d.get('grade')}" for d in diagnoses if d.get('disease') and d.get('grade')])
@@ -55,6 +62,7 @@ class ReportAgent(DiagnosticBaseAgent):
             narrative_parts.append(str(ia_narr))
         if sp_narr:
             narrative_parts.append(str(sp_narr))
+        # If per-image narratives are ever added, they can be merged here as well
         # Compose final summary paragraph and conclusion, then polish via LLM
         final_sentence = []
         if diag_txt:
@@ -79,7 +87,12 @@ class ReportAgent(DiagnosticBaseAgent):
             "management": management,
             "reasoning": reasoning,
             "narrative": reasoning,
-            "conclusion": conclusion
+            "conclusion": conclusion,
+            # Pass through per-image blocks for downstream consumers
+            "per_image": {
+                "lesions": lesions if isinstance(lesions, dict) else None,
+                "specialist": per_sp or None,
+            }
         }
         self.trace_logger.append_event(self.case_id, {
             "type": "agent_step",

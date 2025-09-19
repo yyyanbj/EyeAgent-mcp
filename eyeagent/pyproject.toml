@@ -20,6 +20,7 @@ dependencies = [
     "gradio",
     "python-dotenv",
     "loguru",
+    "prometheus-client>=0.22.1",
 ]
 
 [project.optional-dependencies]
@@ -38,5 +39,12 @@ packages = ["eyeagent"]
 
 [project.scripts]
 eyeagent-diagnose = "eyeagent.run_diagnosis:main"
-eyeagent-multiagent = "eyeagent.run_multiagent:main"
 eyeagent-ui = "eyeagent.ui.app:main"
+
+[tool.pytest.ini_options]
+testpaths = [
+    "tests",
+]
+python_files = [
+    "test_*.py",
+]

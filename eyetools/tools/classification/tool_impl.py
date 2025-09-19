@@ -47,6 +47,35 @@ class ClassificationTool:
         self.transform = None
         self._model_loaded = False
 
+    @staticmethod
+    def describe_outputs(meta: Dict[str, Any], params: Dict[str, Any]) -> Dict[str, Any]:
+        """Return static output description for this tool variant.
+
+        Does not load any weights. Provides categories and field explanations.
+        """
+        try:
+            from .class_lists import TASK_CLASS_MAP  # type: ignore
+        except Exception:  # pragma: no cover
+            TASK_CLASS_MAP = {}
+        task = (params or {}).get("task") or (meta.get("params", {}) or {}).get("task")
+        cats = TASK_CLASS_MAP.get(task)
+        out: Dict[str, Any] = {"schema": (meta.get("io") or {}).get("output_schema", {})}
+        if task == "cfp_age":
+            out["fields"] = {
+                "prediction": "predicted age (years)",
+                "unit": "years",
+                "inference_time": "seconds",
+            }
+        else:
+            out["fields"] = {
+                "predictions": "top-N predicted categories",
+                "probabilities": "map of category -> score",
+                "inference_time": "seconds",
+            }
+            if cats:
+                out["categories"] = cats
+        return out
+
     # For consistency with ToolBase style
     def ensure_model_loaded(self):
         if self._model_loaded:

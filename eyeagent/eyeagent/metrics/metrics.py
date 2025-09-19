@@ -21,7 +21,8 @@ def _maybe_init_prom():
         }
         logger.debug("[metrics] prometheus initialized")
     except Exception as e:
-        logger.debug(f"[metrics] prometheus not available: {e}")
+        # Optional dependency; this is informational and not an error.
+        logger.debug("[metrics] prometheus optional; client not installed – skipping export")
         _PROM = {}
     return _PROM
 

@@ -1,13 +1,13 @@
 import os
 import json
 import asyncio
+import argparse
 from pathlib import Path
 from typing import List, Dict, Any, Tuple, Optional, AsyncGenerator
 import html
 
 import gradio as gr
 
-from eyeagent.diagnostic_workflow import run_diagnosis_async
 from eyeagent.tracing.trace_logger import TraceLogger
 from eyeagent.config.prompts import PromptsConfig
 from eyeagent.config.tools_description import ToolsDescriptionRegistry
@@ -92,8 +92,10 @@ def _resolve_media_path(p: str) -> Optional[str]:
     return None
 
 
-def _format_agent_bubble(agent: str, role: str, reasoning: Optional[str], outputs_preview: Optional[str] = None) -> str:
+def _format_agent_bubble(agent: str, role: str, reasoning: Optional[str], outputs_preview: Optional[str] = None, seq: Optional[int] = None) -> str:
     title = f"{html.escape(agent)} ({html.escape(role)})" if role else html.escape(agent)
+    if seq is not None:
+        title = f"#{seq} • " + title
     body = html.escape(reasoning) if reasoning else ""
     details = (
         f"<details style='margin-top:6px;'><summary style='cursor:pointer;'>Agent outputs</summary>"
@@ -110,23 +112,29 @@ def _format_agent_bubble(agent: str, role: str, reasoning: Optional[str], output
     return _wrap_with_avatar(agent, role, box)
 
 
-def _format_tool_bubble(tool_id: str, status: str, arguments: Dict[str, Any], output_preview: Optional[str] = None, caller_agent: Optional[str] = None, caller_role: Optional[str] = None, images_html: Optional[str] = None) -> str:
+def _format_tool_bubble(tool_id: str, status: str, arguments: Dict[str, Any], output_preview: Optional[str] = None, caller_agent: Optional[str] = None, caller_role: Optional[str] = None, images_html: Optional[str] = None, seq: Optional[int] = None) -> str:
     arg_text = html.escape(str(arguments)) if arguments else "{}"
     header = f"🔧 {html.escape(tool_id)}"
-    sub = f"<div style='color:#455a64; font-size:0.9em;'>by {html.escape(caller_agent or '')} {f'({html.escape(caller_role or "")})' if caller_role else ''}</div>"
+    if seq is not None:
+        header = f"#{seq} • " + header
+    sub = f"<div style='color:#455a64; font-size:0.9em;'>by {html.escape(caller_agent or '')} {f'({html.escape(caller_role or '')})' if caller_role else ''}</div>"
     status_txt = f"Status: {html.escape(status)}"
-    prev = (
-        f"<details style='margin-top:6px;'><summary style='cursor:pointer;font-size:0.9em'>Output summary</summary>"
-        f"<div style='margin-top:6px;color:#37474f;font-size:0.9em'>{output_preview}</div></details>"
+    # Emphasize outputs: show summary immediately, collapse arguments
+    outputs_html = (
+        f"<div style='margin-top:6px;color:#37474f;font-size:0.9em'>{output_preview}</div>"
     ) if output_preview else ""
+    args_html = (
+        f"<details style='margin-top:6px;'><summary style='cursor:pointer;font-size:0.9em'>Call arguments</summary>"
+        f"<div style='margin-top:6px;color:#37474f;font-size:0.9em'><code style='background:#f5f5f5;padding:2px 4px;border-radius:3px;'>{arg_text}</code></div></details>"
+    )
     box = (
         "<div style='background:#ffffff; border:1px solid #e0e0e0; border-left:4px solid #1e88e5; padding:10px;"
         " margin:6px 0; border-radius:6px;'>"
         f"<div style='font-weight:600;color:#0d47a1; margin-bottom:2px;font-size:0.95em'>{header}</div>"
         f"{sub}"
-        f"<div style='color:#0d47a1; margin-top:4px;font-size:0.9em'>📋 Args: <code style='background:#f5f5f5;padding:2px 4px;border-radius:3px;'>{arg_text}</code></div>"
         f"<div style='color:#1565c0; margin-top:4px;font-size:0.9em'>{status_txt}</div>"
-        f"{prev}"
+        f"{outputs_html}"
+        f"{args_html}"
         f"{images_html or ''}"
         "</div>"
     )
@@ -280,6 +288,8 @@ def _embed_images_html(paths: List[str], max_images: int = 4, thumb_w: int = 240
 
 
 async def _run_and_stream(patient: Dict[str, Any], image_paths: List[str], progress: gr.Progress, chatbot: gr.Chatbot, initial_messages: Optional[List[Dict[str, str]]] = None) -> AsyncGenerator[Tuple[List[Dict[str, str]], Dict[str, Any] | str | None], None]:
+    # Import here to respect MCP_SERVER_URL passed via CLI before main sets env
+    from eyeagent.diagnostic_workflow import run_diagnosis_async
     trace = TraceLogger()
     images = [{"image_id": Path(p).stem, "path": p} for p in image_paths]
     case_id = trace.create_case(patient=patient, images=images)
@@ -312,7 +322,7 @@ async def _run_and_stream(patient: Dict[str, Any], image_paths: List[str], progr
     messages.append({"role": "system", "content": f"Started case {case_id}. Running diagnosis..."})
     yield messages, None
 
-    task = asyncio.create_task(run_diagnosis_async(patient, images, trace=trace, case_id=case_id))
+    task = asyncio.create_task(run_diagnosis_async(patient, images, trace=trace, case_id=case_id, messages=messages))
 
     trace_path = Path(trace._trace_path(case_id))
     last_count = 0
@@ -336,7 +346,7 @@ async def _run_and_stream(patient: Dict[str, Any], image_paths: List[str], progr
                         output = ev.get("output")
                         imgs = _tool_output_images(output or {})
                         gallery_html = _embed_images_html(imgs) if imgs else None
-                        bubble = _format_tool_bubble(tool or "tool", status or "", args, _summarize_tool_output(output), ev.get("agent"), ev.get("role"), images_html=gallery_html)
+                        bubble = _format_tool_bubble(tool or "tool", status or "", args, _summarize_tool_output(output), ev.get("agent"), ev.get("role"), images_html=gallery_html, seq=ev.get("seq"))
                         msgs.append({"role": "assistant", "content": bubble})
                         print(f"[tool_call] {ev.get('agent')} ({ev.get('role')}): {tool} -> {status}")
                     elif et == "agent_step":
@@ -344,7 +354,7 @@ async def _run_and_stream(patient: Dict[str, Any], image_paths: List[str], progr
                         role = ev.get("role") or ""
                         reasoning = ev.get("reasoning")
                         outputs_prev = _summarize_agent_outputs(ev.get("outputs"))
-                        msgs.append({"role": "assistant", "content": _format_agent_bubble(agent, role, reasoning, outputs_prev)})
+                        msgs.append({"role": "assistant", "content": _format_agent_bubble(agent, role, reasoning, outputs_prev, seq=ev.get("seq"))})
                         print(f"[agent_step] {agent} ({role})")
                     elif et == "error":
                         msgs.append({"role": "assistant", "content": f"[error] {ev.get('message', 'Error')}"})
@@ -410,6 +420,8 @@ def _events_to_messages(events: List[Dict[str, Any]], case_id: Optional[str] = N
 
 
 async def _continue_and_stream(case_id: str, additional_instruction: str, progress: gr.Progress) -> AsyncGenerator[Tuple[List[Dict[str, str]], Dict[str, Any] | None], None]:
+    # Import here to respect MCP_SERVER_URL passed via CLI before main sets env
+    from eyeagent.diagnostic_workflow import run_diagnosis_async
     # Load existing case data
     cases_dir = _find_cases_dir()
     trace_path = cases_dir / case_id / "trace.json"
@@ -617,8 +629,8 @@ def build_interface() -> gr.Blocks:
             cfg_dir = gr.Textbox(label="Config Directory (EYEAGENT_CONFIG_DIR)", value="", placeholder="Leave blank to use repo_root/config", interactive=True)
             with gr.Row():
                 agent_sel = gr.Dropdown(label="Agent", choices=[
-                    "OrchestratorAgent", "ImageAnalysisAgent", "SpecialistAgent", "FollowUpAgent", "ReportAgent"
-                ], value="OrchestratorAgent")
+                    "UnifiedAgent"
+                ], value="UnifiedAgent")
                 load_sp_btn = gr.Button("Load System Prompt")
                 save_sp_btn = gr.Button("Save System Prompt")
             sys_prompt_box = gr.Textbox(label="System Prompt", lines=10)
@@ -694,6 +706,15 @@ def build_interface() -> gr.Blocks:
 
 
 def main():
+    parser = argparse.ArgumentParser(description="EyeAgent UI")
+    parser.add_argument("--mcp-url", dest="mcp_url", help="MCP server base URL (e.g., http://localhost:8000/mcp/)")
+    parser.add_argument("--port", dest="port", type=int, default=None, help="UI server port (default 7860 or EYEAGENT_UI_PORT)")
+    args = parser.parse_args()
+
+    # If provided, set MCP_SERVER_URL before any diagnostic workflow imports occur
+    if args.mcp_url:
+        os.environ["MCP_SERVER_URL"] = args.mcp_url
+
     demo = build_interface()
     # determine repository root to allow serving media files generated outside CWD
     t = TraceLogger()
@@ -705,7 +726,7 @@ def main():
     allowed.add("/tmp")
     demo.launch(
         server_name="0.0.0.0",
-        server_port=int(os.getenv("EYEAGENT_UI_PORT", "7860")),
+        server_port=(args.port or int(os.getenv("EYEAGENT_UI_PORT", "7860"))),
         allowed_paths=list(allowed),
     )
 

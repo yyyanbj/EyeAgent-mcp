@@ -18,8 +18,8 @@ if not os.getenv("OPENAI_API_KEY") and os.getenv("DEEPSEEK_API_KEY"):
 # Global defaults (can be overridden per-agent via env)
 DEFAULT_BASE_URL = os.getenv("AGENT_LLM_BASE_URL", os.getenv("OPENAI_BASE_URL", "https://api.deepseek.com/v1"))
 DEFAULT_MODEL = os.getenv("AGENT_LLM_MODEL", os.getenv("OPENAI_MODEL", "deepseek-chat"))
-DEFAULT_TEMPERATURE = float(os.getenv("AGENT_LLM_TEMPERATURE", "0.7"))
-DEFAULT_MAX_TOKENS = int(os.getenv("AGENT_LLM_MAX_TOKENS", "4096"))
+DEFAULT_TEMPERATURE = float(os.getenv("AGENT_LLM_TEMPERATURE", "1.0"))
+DEFAULT_MAX_TOKENS = int(os.getenv("AGENT_LLM_MAX_TOKENS", "64000"))
 
 
 def _agent_model(agent_name: Optional[str]) -> str:

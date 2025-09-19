@@ -9,12 +9,14 @@ from ..tracing.trace_logger import TraceLogger
 from ..metrics.metrics import tool_timer, add_tokens
 from ..tools.tool_registry import get_tool
 from ..config.prompts import PromptsConfig
+from ..config.settings import build_chat_model, get_llm_config
 from ..llm.json_client import JsonLLM
 from ..llm.models import ToolPlan, ReasoningOut
 from ..tools.langchain_mcp_tools import build_langchain_mcp_tools, load_tools_from_mcp
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage, ToolMessage
 from langchain_openai import ChatOpenAI
 import os
+from contextlib import asynccontextmanager
 
 class DiagnosticBaseAgent:
     # Capabilities declaration (subclasses should override as needed)
@@ -44,11 +46,19 @@ class DiagnosticBaseAgent:
     # tool_id list from tool registry
     allowed_tool_ids: List[str] = []
     system_prompt: str = "You are a diagnostic agent."
+    # Class-level LLM shared per agent class (can be overridden in subclasses)
+    llm = None
 
     def __init__(self, mcp_url: str, trace_logger: TraceLogger, case_id: str):
         self.mcp_url = mcp_url
         self.trace_logger = trace_logger
         self.case_id = case_id
+        # Initialize class-level LLM if not set
+        if self.__class__.llm is None:
+            try:
+                self.__class__.llm = build_chat_model(self.__class__.__name__)
+            except Exception:
+                self.__class__.llm = None
         # Load system prompt override from config if present
         try:
             cfg = PromptsConfig()
@@ -59,6 +69,20 @@ class DiagnosticBaseAgent:
             pass
 
     # LLM is disabled for diagnostic agents; planning should be implemented per-agent
+
+    def _dry_run(self) -> bool:
+        return os.getenv("EYEAGENT_DRY_RUN", "0").lower() in ("1", "true", "yes")
+
+    @asynccontextmanager
+    async def _client_ctx(self):
+        """Yield a real MCP client unless DRY-RUN is enabled.
+
+        In DRY-RUN mode, yield None and avoid any network connection attempts."""
+        if self._dry_run():
+            yield None
+            return
+        async with Client(self.mcp_url) as client:
+            yield client
 
     async def _call_tool(self, client: Client, tool_id: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
         meta = get_tool(tool_id)
@@ -71,6 +95,22 @@ class DiagnosticBaseAgent:
             "version": meta.get("version") if meta else None,
             "arguments": arguments,
         }
+        # DRY-RUN: return mock outputs without calling MCP
+        if self._dry_run(): 
+            role = (meta or {}).get("role")
+            mock: Dict[str, Any] = {"mock": True}
+            try:
+                if role == "specialist":
+                    mock.update({"grade": "ungraded", "confidence": 0.0})
+                elif isinstance(tool_id, str) and tool_id.startswith("classification:cfp_quality"):
+                    mock.update({"prediction": "unknown"})
+                elif isinstance(tool_id, str) and tool_id.startswith("segmentation:"):
+                    mock.update({"counts": {}})
+            except Exception:
+                pass
+            event = {**event_base, "status": "success", "output": mock, "dry_run": True}
+            self.trace_logger.append_event(self.case_id, event)
+            return {"tool_id": tool_id, "output": mock, "status": "success", "version": meta.get("version") if meta else None}
         try:
             if not meta:
                 raise ValueError(f"Unknown tool_id={tool_id}")
@@ -101,6 +141,9 @@ class DiagnosticBaseAgent:
         """
         available = available or []
         if not available:
+            return []
+        # DRY-RUN: skip LLM planner so agents fall back to their static plans
+        if self._dry_run():
             return []
         # Build tool description hint
         desc_lines: List[str] = []
@@ -168,6 +211,9 @@ class DiagnosticBaseAgent:
 
         Returns the 'reasoning' field from JSON; falls back to input summary on failure.
         """
+        # DRY-RUN: return the summary directly
+        if self._dry_run():
+            return context_summary
         sys = f"You are the {self.name} ({self.role}). Provide concise medical reasoning."
         user = f"Context summary to explain concisely: {context_summary}"
         try:
@@ -197,12 +243,8 @@ class DiagnosticBaseAgent:
         messages: optional list of role/content dicts; if None, a default HumanMessage is built.
         Returns a dict with keys: messages (langchain messages), tool_calls (list), final_response (AI content str).
         """
-        # Build chat model per-agent using the same factory as JsonLLM
-        base_url = os.getenv("EYEAGENT_LLM_BASE_URL", os.getenv("AGENT_LLM_BASE_URL", "https://api.deepseek.com/v1"))
-        model_name = os.getenv(f"EYEAGENT_MODEL_{self.__class__.__name__}", os.getenv("AGENT_LLM_MODEL", "deepseek-chat"))
-        temperature = float(os.getenv("EYEAGENT_LLM_TEMPERATURE", "0.7"))
-        max_tokens = int(os.getenv("EYEAGENT_LLM_MAX_TOKENS", "4096"))
-        llm = ChatOpenAI(base_url=base_url, model=model_name, temperature=temperature, max_tokens=max_tokens)
+        # Build chat model using class-level LLM or fallback to settings
+        llm = self.__class__.llm or build_chat_model(self.__class__.__name__)
 
         # Build LangChain tool stubs for tool_calls; execution is handled by _call_tool for tracing
         use_adapter = os.getenv("EYEAGENT_MCP_ADAPTER_BIND", "0").lower() in ("1", "true", "yes")
@@ -278,7 +320,7 @@ class DiagnosticBaseAgent:
                     # Return a tool error message to the model
                     lc_messages.append(ToolMessage(tool_call_id=call.get("id"), name=name or "unknown", args=args, content="{\"error\": \"invalid tool\"}"))
                     continue
-                async with Client(self.mcp_url) as client:
+                async with self._client_ctx() as client:
                     logger.debug(f"[{self.name}] calling tool tool_id={tool_id} args={args}")
                     tc = await self._call_tool(client, tool_id, args)
                 tool_calls_acc.append(tc)

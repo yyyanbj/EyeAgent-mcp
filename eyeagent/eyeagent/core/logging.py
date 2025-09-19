@@ -17,7 +17,7 @@ def setup_logging() -> None:
     if _CONFIGURED:
         return
 
-    level = os.getenv("EYEAGENT_LOG_LEVEL", "INFO")
+    level = os.getenv("EYEAGENT_LOG_LEVEL", "DEBUG")
     fmt = os.getenv(
         "EYEAGENT_LOG_FORMAT",
         "<green>{time:YYYY-MM-DD HH:mm:ss.SSS}</green> | <level>{level: <8}</level> | "

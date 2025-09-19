@@ -87,6 +87,9 @@ class TraceLogger:
     def _final_path(self, case_id: str) -> str:
         return os.path.join(self._case_dir(case_id), "final_report.json")
 
+    def _conversation_path(self, case_id: str) -> str:
+        return os.path.join(self._case_dir(case_id), "conversation.jsonl")
+
     def create_case(self, patient: Dict[str, Any], images: List[Dict[str, Any]]) -> str:
         case_id = str(uuid.uuid4())
         case_dir = self._case_dir(case_id)
@@ -97,7 +100,8 @@ class TraceLogger:
             "updated_at": ISO(),
             "patient": patient,
             "images": images,
-            "events": []
+            "events": [],
+            "next_seq": 1
         }
         self._atomic_write_json(self._trace_path(case_id), doc)
         return case_id
@@ -122,13 +126,55 @@ class TraceLogger:
                             pass
                 finally:
                     # Reconstruct minimal doc to keep pipeline running
-                    doc = {"case_id": case_id, "created_at": ISO(), "updated_at": ISO(), "patient": {}, "images": [], "events": []}
+                    doc = {"case_id": case_id, "created_at": ISO(), "updated_at": ISO(), "patient": {}, "images": [], "events": [], "next_seq": 1}
                     # Attach an error event noting the recovery
                     doc["events"].append({"ts": ISO(), "type": "error", "message": f"Recovered from corrupted trace.json: {type(e).__name__}: {e}"})
             event.setdefault("ts", ISO())
+            # assign and increment sequence number
+            try:
+                seq = int(doc.get("next_seq") or 1)
+            except Exception:
+                seq = 1
+            event["seq"] = seq
+            doc["next_seq"] = seq + 1
             doc["events"].append(event)
             doc["updated_at"] = ISO()
             self._atomic_write_json(path, doc)
+
+    def append_conversation_message(self, case_id: str, message: Dict[str, Any]):
+        """Append a chat message to conversation.jsonl with seq and timestamp.
+
+        Message should be like {"role": "assistant|user|system", "content": str, ...}.
+        We'll enrich it with ts and seq from trace.json to keep consistent ordering.
+        """
+        with self._lock:
+            # First read/advance sequence from trace.json for consistent numbering
+            path = self._trace_path(case_id)
+            try:
+                with open(path, 'r', encoding='utf-8') as f:
+                    doc = json.load(f)
+            except Exception:
+                doc = {"next_seq": 1}
+            try:
+                seq = int(doc.get("next_seq") or 1)
+            except Exception:
+                seq = 1
+            # bump and persist the next_seq in trace.json (without adding an event)
+            doc["updated_at"] = ISO()
+            doc["next_seq"] = seq + 1
+            self._atomic_write_json(path, doc)
+
+            rec = dict(message or {})
+            rec.setdefault("ts", ISO())
+            rec["seq"] = seq
+            # Write JSONL record
+            cpath = self._conversation_path(case_id)
+            os.makedirs(os.path.dirname(cpath), exist_ok=True)
+            with open(cpath, 'a', encoding='utf-8') as f:
+                f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+
+    def get_conversation_path(self, case_id: str) -> str:
+        return self._conversation_path(case_id)
 
     def write_final_report(self, case_id: str, report: Dict[str, Any]):
         with self._lock:

@@ -4,6 +4,7 @@
 输入：患者基本资料（年龄、性别、主诉、既往史等）+ 多模态眼科影像（CFP、OCT、FFA ...）\n输出：结构化诊断报告（疾病结论、分级、病灶结果、随访/治疗建议）+ 完整 reasoning trace（可溯源）。
 
 ## Agent 角色
+注：系统正逐步合并为“单一 Unified Agent（配置驱动）”架构，以下分角色描述用于阐释职责边界与推理视角，实际运行时由一个统一 Agent 依据 YAML 配置选择工具与决策路径。
 | Agent | 功能 | 主要工具 | 关键输出 |
 |-------|------|----------|----------|
 | Orchestrator | 流程调度、模态识别、左右眼识别、任务规划 | 模态分类、左右眼分类 | 调用路径、决策 reasoning |
@@ -82,25 +83,51 @@ TOOL_REGISTRY = {
 - Agent 基类生成 prompt 时动态拼接：当前病例上下文 + 已有中间结果摘要 + 工具列表 + 期望 JSON 输出 schema
 - 预留 `prompt_variants/` 目录保存演化版本，用于 text grad 对比
 
-## 目录结构（新增部分）
+## 目录结构（统一版，推荐）
 ```
 eyeagent/
   agents/
+    __init__.py
     base_agent.py
-    diagnostic_base_agent.py      # 新增：带 reasoning 与 trace hook
+    diagnostic_base_agent.py      # 带 reasoning 与 trace hook
+    registry.py                   # 配置驱动的 Agent 加载（默认统一 Agent）
+    # 注：legacy 多 Agent 文件仍在仓库中，处于弃用状态，后续将移除
+  config/
+    settings.py
+    prompts.py
+    pipelines.py
+    tools_description.py
+  core/
+    interaction_engine.py
+    logging.py
+  llm/
+    json_client.py
+    models.py
+  tools/
+    tool_registry.py              # 工具元数据 & 查询（支持按配置筛选）
+    langchain_mcp_tools.py
+  tracing/
+    trace_logger.py               # 统一事件/报告持久化
+  ui/
+    app.py
+  schemas/
+    diagnosis_report_schema.json
+  diagnostic_workflow.py          # 工作流调度入口（使用统一 Agent）
+  run_diagnosis.py                # CLI 入口（优先使用该路径下的脚本）
+```
+
+提示：仓库根目录下的 `diagnostic_workflow.py` 与 `run_diagnosis.py` 为旧版重复入口，已弃用，后续清理；请使用 `eyeagent/` 目录下的对应脚本。
+
+## 目录结构（legacy，待移除）
+以下为早期多 Agent 形态下的文件，仅供历史参考：
+```
+eyeagent/
+  agents/
     orchestrator_agent.py
     image_analysis_agent.py
     specialist_agent.py
     followup_agent.py
     report_agent.py
-  tracing/
-    trace_logger.py               # 统一事件/报告持久化
-  tools/
-    tool_registry.py              # 工具元数据 & 查询
-  schemas/
-    diagnosis_report_schema.json
-  diagnostic_workflow.py          # 工作流调度入口
-  run_diagnosis.py                # CLI 入口
 ```
 
 ## 扩展与测试建议

@@ -410,8 +410,39 @@ def create_app(
 
     @app.get("/tools")
     def list_tools(role: Optional[str] = Query(None)):
+        # Role filtering first to get the set of allowed tool ids
         result = role_router.filter_tools(role, registry.list())
-        return result.to_payload()
+
+        # Build enriched tool descriptions. Preserve backward compatibility when role requires manual selection.
+        if result.selection_required:
+            return {"selection_required": True, "candidates": result.tool_ids}
+
+        # When auto selection, include detailed descriptions per tool
+        metas_by_id = {m.id: m for m in registry.list()}
+        tools_out = []
+        for tid in result.tool_ids:
+            m = metas_by_id.get(tid)
+            if not m:
+                continue
+            out: Dict[str, Any] = {
+                "id": m.id,
+                "package": m.package,
+                "variant": m.variant,
+                "category": m.category,
+                "runtime": m.runtime,
+                "model": m.model,
+                "io": m.io,
+                "tags": m.tags,
+            }
+            # Ask tool implementation for optional output details (decoupled from server)
+            try:
+                details = tm.get_output_details(m.id)
+                if details:
+                    out["output_details"] = details
+            except Exception:
+                pass
+            tools_out.append(out)
+        return {"tools": tools_out}
 
     @app.post("/predict")
     def predict(req: PredictRequest):
