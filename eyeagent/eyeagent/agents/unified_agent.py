@@ -1,6 +1,6 @@
 from __future__ import annotations
 from typing import Any, Dict, List, Optional
-from .diagnostic_base_agent import DiagnosticBaseAgent
+from .base_agent import BaseAgent as DiagnosticBaseAgent
 from .registry import register_agent
 from fastmcp import Client
 from loguru import logger
@@ -46,18 +46,7 @@ class UnifiedAgent(DiagnosticBaseAgent):
         except Exception:
             return []
 
-    async def _call_per_image(self, client: Client, tool_id: str, images: List[Dict[str, Any]], arguments: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
-        calls: List[Dict[str, Any]] = []
-        img_list = images if images else [None]
-        for img in img_list:
-            args = dict(arguments or {})
-            if isinstance(img, dict) and img.get("path"):
-                args.setdefault("image_path", img.get("path"))
-            tc = await self._call_tool(client, tool_id, args)
-            if isinstance(img, dict):
-                tc["image_id"] = img.get("image_id") or img.get("path")
-            calls.append(tc)
-        return calls
+    # use base helper: call_tool_per_image
 
     async def a_run(self, context: Dict[str, Any]) -> Dict[str, Any]:
         images = context.get("images", [])
@@ -73,7 +62,7 @@ class UnifiedAgent(DiagnosticBaseAgent):
             # 1) Orchestration-lite: modality & laterality
             if any(t for t in ("classification:modality", "classification:laterality") if t in allowed):
                 if "classification:modality" in allowed:
-                    tool_calls += await self._call_per_image(client, "classification:modality", images)
+                    tool_calls += await self.call_tool_per_image(client, "classification:modality", images)
                     try:
                         out = (tool_calls[-1] or {}).get("output")
                         if isinstance(out, dict):
@@ -81,11 +70,11 @@ class UnifiedAgent(DiagnosticBaseAgent):
                     except Exception:
                         modality_label = None
                 if "classification:laterality" in allowed:
-                    tool_calls += await self._call_per_image(client, "classification:laterality", images)
+                    tool_calls += await self.call_tool_per_image(client, "classification:laterality", images)
 
             # Optional CFP screening
             if (modality_label or "").upper() in ("", "CFP") and "classification:multidis" in allowed:
-                md = await self._call_per_image(client, "classification:multidis", images[:1])
+                md = await self.call_tool_per_image(client, "classification:multidis", images[:1])
                 tool_calls += md
                 try:
                     out = (md[0] or {}).get("output")
@@ -101,13 +90,13 @@ class UnifiedAgent(DiagnosticBaseAgent):
             ia_calls: List[Dict[str, Any]] = []
             if (modality_label or "").upper() in ("", "CFP"):
                 for tid in [t for t in allowed if t == "classification:cfp_quality" or t.startswith("segmentation:cfp_")]:
-                    ia_calls += await self._call_per_image(client, tid, images)
+                    ia_calls += await self.call_tool_per_image(client, tid, images)
             elif (modality_label or "").upper() == "OCT":
                 for tid in [t for t in allowed if t.startswith("segmentation:oct_")]:
-                    ia_calls += await self._call_per_image(client, tid, images)
+                    ia_calls += await self.call_tool_per_image(client, tid, images)
             elif (modality_label or "").upper() == "FFA":
                 for tid in [t for t in allowed if t.startswith("segmentation:ffa_")]:
-                    ia_calls += await self._call_per_image(client, tid, images)
+                    ia_calls += await self.call_tool_per_image(client, tid, images)
             tool_calls += ia_calls
 
             # Aggregate IA outputs
@@ -150,13 +139,13 @@ class UnifiedAgent(DiagnosticBaseAgent):
 
             sp_calls: List[Dict[str, Any]] = []
             for tid in sp_tool_ids:
-                sp_calls += await self._call_per_image(client, tid, images)
+                sp_calls += await self.call_tool_per_image(client, tid, images)
             tool_calls += sp_calls
 
             # 4) Follow-up: optional age
             fu_output: Optional[Dict[str, Any]] = None
             if "classification:cfp_age" in allowed:
-                age_calls = await self._call_per_image(client, "classification:cfp_age", images[:1])
+                age_calls = await self.call_tool_per_image(client, "classification:cfp_age", images[:1])
                 tool_calls += age_calls
                 try:
                     fu_output = age_calls[-1].get("output") if age_calls else None

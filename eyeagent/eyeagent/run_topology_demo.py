@@ -3,7 +3,7 @@ import os
 from typing import Any, Dict
 
 from .core.topologies import run_ring
-from .core.adapters import (
+from .examples.adapters import (
     orchestrator_plan_adapter,
     image_analysis_adapter,
     specialist_adapter,

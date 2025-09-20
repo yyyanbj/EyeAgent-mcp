@@ -628,9 +628,12 @@ def build_interface() -> gr.Blocks:
             gr.Markdown("### Prompts Configuration")
             cfg_dir = gr.Textbox(label="Config Directory (EYEAGENT_CONFIG_DIR)", value="", placeholder="Leave blank to use repo_root/config", interactive=True)
             with gr.Row():
-                agent_sel = gr.Dropdown(label="Agent", choices=[
-                    "UnifiedAgent"
-                ], value="UnifiedAgent")
+                # Populate agent names dynamically from prompts config keys so each agent uses its own name
+                try:
+                    _sp_keys = sorted(list((PromptsConfig().load().get("system_prompts") or {}).keys()))
+                except Exception:
+                    _sp_keys = ["UnifiedAgent"]
+                agent_sel = gr.Dropdown(label="Agent", choices=_sp_keys, value=(_sp_keys[0] if _sp_keys else "UnifiedAgent"))
                 load_sp_btn = gr.Button("Load System Prompt")
                 save_sp_btn = gr.Button("Save System Prompt")
             sys_prompt_box = gr.Textbox(label="System Prompt", lines=10)

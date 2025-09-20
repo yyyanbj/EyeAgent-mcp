@@ -1,5 +1,5 @@
 from typing import Any, Dict, List
-from .diagnostic_base_agent import DiagnosticBaseAgent
+from .base_agent import BaseAgent as DiagnosticBaseAgent
 from .registry import register_agent
 from ..tools.tool_registry import specialist_tools, get_tool, resolve_specialist_tools, role_tool_ids
 from ..config.tools_filter import filter_tool_ids

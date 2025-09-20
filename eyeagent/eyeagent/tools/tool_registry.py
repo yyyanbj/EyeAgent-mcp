@@ -279,17 +279,22 @@ def _load_tools_config() -> Dict[str, Any]:
     try:
         from ..tracing.trace_logger import TraceLogger  # type: ignore
         t = TraceLogger()
-        base_dir = os.path.abspath(os.path.join(t.base_dir, os.pardir))
+        repo_root = os.path.abspath(os.path.join(t.base_dir, os.pardir))
     except Exception:
-        base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+        repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+
+    # Both new preferred location (eyeagent/config) and legacy (config) are supported
+    eye_cfg = os.path.join(repo_root, "eyeagent", "config")
+    legacy_cfg = os.path.join(repo_root, "config")
 
     candidates: List[str] = []
     env_path = os.getenv("EYEAGENT_TOOLS_FILE")
     if env_path:
         candidates.append(env_path)
-    candidates.append(os.path.join(base_dir, "config", "tools.yml"))
-    candidates.append(os.path.join(base_dir, "config", "tools.yaml"))
-    candidates.append(os.path.join(base_dir, "config", "tools.json"))
+    for d in (eye_cfg, legacy_cfg):
+        candidates.append(os.path.join(d, "tools.yml"))
+        candidates.append(os.path.join(d, "tools.yaml"))
+        candidates.append(os.path.join(d, "tools.json"))
 
     try:
         import yaml  # type: ignore

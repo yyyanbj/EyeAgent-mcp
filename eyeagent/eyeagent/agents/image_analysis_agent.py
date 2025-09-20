@@ -1,5 +1,5 @@
 from typing import Any, Dict, List
-from .diagnostic_base_agent import DiagnosticBaseAgent
+from .base_agent import BaseAgent as DiagnosticBaseAgent
 from .registry import register_agent
 from fastmcp import Client
 from ..config.tools_filter import filter_tool_ids
@@ -84,21 +84,14 @@ class ImageAnalysisAgent(DiagnosticBaseAgent):
 
         tool_calls = []
         async with self._client_ctx() as client:
-            img_list = images if images else [None]
             for step in plan:
                 tool_id = step.get("tool_id")
                 if tool_id not in allowed:
                     continue
-                for img in img_list:
-                    img_path = (img or {}).get("path") if isinstance(img, dict) else None
-                    args = dict(step.get("arguments") or {})
-                    if img_path:
-                        args["image_path"] = img_path
-                    tc = await self._call_tool(client, tool_id, args)
-                    tc["reasoning"] = step.get("reasoning")
-                    if isinstance(img, dict):
-                        tc["image_id"] = img.get("image_id") or img.get("path")
-                    tool_calls.append(tc)
+                calls = await self.call_tool_per_image(client, tool_id, images, step.get("arguments") or {})
+                for c in calls:
+                    c["reasoning"] = step.get("reasoning")
+                tool_calls.extend(calls)
 
         # Aggregate outputs (simplified)
         # Aggregate per-image

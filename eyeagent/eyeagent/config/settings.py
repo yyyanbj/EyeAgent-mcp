@@ -21,11 +21,36 @@ DEFAULT_SETTINGS: Dict[str, Any] = {
     # Workflow + agent wiring is config-driven; default to unified
     "workflow": {
         "mode": os.getenv("EYEAGENT_WORKFLOW_MODE", "unified"),  # unified | graph | interaction | profile
+        "specialist": {
+            # threshold to select candidate diseases from screening probabilities
+            "candidate_threshold": float(os.getenv("EYEAGENT_CANDIDATE_THRESHOLD", "0.3")),
+            "candidate_top_k": int(os.getenv("EYEAGENT_CANDIDATE_TOPK", "5")),
+        },
     },
     # Agents map: role -> dotted class path; enabled flag allows pruning
     "agents": {
         "unified": {
             "class": "eyeagent.agents.unified_agent.UnifiedAgent",
+            "enabled": True,
+        },
+        "orchestrator": {
+            "class": "eyeagent.agents.orchestrator_agent.OrchestratorAgent",
+            "enabled": True,
+        },
+        "image_analysis": {
+            "class": "eyeagent.agents.image_analysis_agent.ImageAnalysisAgent",
+            "enabled": True,
+        },
+        "specialist": {
+            "class": "eyeagent.agents.specialist_agent.SpecialistAgent",
+            "enabled": True,
+        },
+        "follow_up": {
+            "class": "eyeagent.agents.followup_agent.FollowUpAgent",
+            "enabled": True,
+        },
+        "report": {
+            "class": "eyeagent.agents.report_agent.ReportAgent",
             "enabled": True,
         },
     },
@@ -44,10 +69,10 @@ class Settings:
         if cfg_file_env:
             self.file_path = Path(cfg_file_env)
         else:
-            # Prefer eyeagent/config folder by default
+            # Prefer repo-root config/ by default, fallback to eyeagent/config
             default_cfg_dir = base / "eyeagent" / "config"
             legacy_cfg_dir = base / "config"
-            cfg_dir = Path(os.getenv("EYEAGENT_CONFIG_DIR", str(default_cfg_dir if default_cfg_dir.exists() else legacy_cfg_dir)))
+            cfg_dir = Path(os.getenv("EYEAGENT_CONFIG_DIR", str(legacy_cfg_dir if legacy_cfg_dir.exists() else default_cfg_dir)))
             cfg_dir.mkdir(parents=True, exist_ok=True)
             self.file_path = cfg_dir / "eyeagent.yml"
 
@@ -105,6 +130,21 @@ def get_workflow_mode() -> str:
     cfg = Settings().load()
     mode = (cfg.get("workflow") or {}).get("mode") or "unified"
     return str(mode).lower()
+
+
+def get_specialist_selection_settings() -> Dict[str, Any]:
+    cfg = Settings().load()
+    wf = cfg.get("workflow") or {}
+    sp = wf.get("specialist") or {}
+    try:
+        th = float(sp.get("candidate_threshold", 0.3))
+    except Exception:
+        th = 0.3
+    try:
+        k = int(sp.get("candidate_top_k", 5))
+    except Exception:
+        k = 5
+    return {"candidate_threshold": th, "candidate_top_k": k}
 
 
 def get_configured_agents() -> Dict[str, Dict[str, Any]]:

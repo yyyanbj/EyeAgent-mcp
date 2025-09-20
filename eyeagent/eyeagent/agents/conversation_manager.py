@@ -1,3 +1,8 @@
+"""
+Legacy/demo conversation persistence helper.
+Note: not required by the core diagnostic agents; retained for experimental flows.
+"""
+
 import os
 import uuid
 import json

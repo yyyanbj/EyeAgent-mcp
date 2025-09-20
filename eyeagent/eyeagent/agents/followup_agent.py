@@ -1,5 +1,5 @@
 from typing import Any, Dict, List
-from .diagnostic_base_agent import DiagnosticBaseAgent
+from .base_agent import BaseAgent as DiagnosticBaseAgent
 from .registry import register_agent
 from fastmcp import Client
 

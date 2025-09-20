@@ -1,0 +1,31 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+
+# Virtual envs
+.venv/
+venv/
+
+# Editor
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+
+# Test/coverage
+.pytest_cache/
+.coverage*
+
+# Local runtime data
+cases/
+eyeagent/cases/
+logs/
+.trash/
+
+# Env files (keep example)
+.env
+.env.*
+!.env.example

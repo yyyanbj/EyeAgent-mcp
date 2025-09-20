@@ -1,9 +1,11 @@
 from typing import Any, Dict, List
-from .diagnostic_base_agent import DiagnosticBaseAgent
+from .base_agent import BaseAgent as DiagnosticBaseAgent
 from .registry import register_agent
 from fastmcp import Client
 from loguru import logger
 from ..config.tools_filter import filter_tool_ids
+from ..config.settings import get_specialist_selection_settings
+from ..core.diagnosis_utils import get_candidate_diseases_from_probs
 
 @register_agent
 class OrchestratorAgent(DiagnosticBaseAgent):
@@ -11,8 +13,11 @@ class OrchestratorAgent(DiagnosticBaseAgent):
     name = "OrchestratorAgent"
     allowed_tool_ids = ["classification:modality", "classification:laterality", "classification:multidis"]
     system_prompt = (
-        "You are the orchestrator. Tasks: (1) infer imaging modality, (2) classify laterality, (3) plan downstream pipeline. "
-        "Always provide reasoning."
+        "You are the OrchestratorAgent for an ophthalmology diagnostic system. "
+        "Your tasks: (1) Infer imaging modality (CFP/OCT/FFA), (2) Classify laterality (OD/OS), (3) Plan the downstream diagnostic pipeline (ImageAnalysis, Specialist, FollowUp, Report). "
+        "For each step, provide detailed clinical reasoning and context. "
+        "When generating the final report, synthesize a comprehensive, patient-friendly ophthalmology summary that integrates all findings, including diagnoses, lesion details, management suggestions, and any uncertainties. "
+        "Highlight key findings, explain their significance, and ensure the summary is clear for both clinicians and patients."
     )
 
     # Capabilities declaration for orchestrator
@@ -48,19 +53,10 @@ class OrchestratorAgent(DiagnosticBaseAgent):
                 tool_id = req.get("tool_id")
                 if tool_id not in filtered_allowed:
                     continue
-                # Run per image when available
-                img_list = images if images else [None]
-                for img in img_list:
-                    img_path = (img or {}).get("path") if isinstance(img, dict) else None
-                    arguments = dict(req.get("arguments") or {})
-                    if img_path:
-                        # force correct image_path into arguments, overriding any placeholder
-                        arguments["image_path"] = img_path
-                    tc = await self._call_tool(client, tool_id, arguments)
-                    tc["reasoning"] = req.get("reasoning")
-                    if isinstance(img, dict):
-                        tc["image_id"] = img.get("image_id") or img.get("path")
-                    tool_calls.append(tc)
+                calls = await self.call_tool_per_image(client, tool_id, images, req.get("arguments") or {})
+                for c in calls:
+                    c["reasoning"] = req.get("reasoning")
+                tool_calls.extend(calls)
 
         modality_results = [c for c in tool_calls if c["tool_id"] == "classification:modality"]
         laterality_results = [c for c in tool_calls if c["tool_id"] == "classification:laterality"]
@@ -99,28 +95,15 @@ class OrchestratorAgent(DiagnosticBaseAgent):
         try:
             if screening_results:
                 s_out = (screening_results[0] or {}).get("output")
-                if isinstance(s_out, dict):
-                    # either probabilities dict or predictions list with probs
-                    probs = s_out.get("probabilities") if isinstance(s_out.get("probabilities"), dict) else s_out
-                    if isinstance(probs, dict) and probs:
-                        for k, v in probs.items():
-                            try:
-                                fv = float(v)
-                            except Exception:
-                                continue
-                            if fv > top_prob:
-                                top_prob = fv
-                                top_dis = k
-                    elif isinstance(s_out, dict) and s_out:
-                        # fallback: treat values as probs
-                        for k, v in s_out.items():
-                            try:
-                                fv = float(v)
-                            except Exception:
-                                continue
-                            if fv > top_prob:
-                                top_prob = fv
-                                top_dis = k
+                probs = (s_out or {}).get("probabilities") if isinstance(s_out, dict) and isinstance((s_out or {}).get("probabilities"), dict) else s_out
+                cands = get_candidate_diseases_from_probs(probs, threshold=get_specialist_selection_settings()["candidate_threshold"], top_k=1)
+                if cands:
+                    top_dis = cands[0]
+                    # find its prob if available
+                    try:
+                        top_prob = float((probs or {}).get(top_dis, 0.0)) if isinstance(probs, dict) else 0.0
+                    except Exception:
+                        top_prob = 0.0
         except Exception:
             pass
         # Heuristics:

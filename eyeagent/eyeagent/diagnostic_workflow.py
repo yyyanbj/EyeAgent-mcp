@@ -33,6 +33,8 @@ from .config.pipelines import get_profile_steps, step_should_run
 from .config.settings import get_workflow_mode
 from .metrics.metrics import step_timer
 from .core.interaction_engine import InteractionEngine
+from .config.settings import get_specialist_selection_settings
+from .core.diagnosis_utils import get_candidate_diseases_from_probs
 
 MCP_SERVER_URL = os.getenv("MCP_SERVER_URL", "http://localhost:8000/mcp/")
 SCHEMA_VERSION = "1.0.0"
@@ -205,14 +207,20 @@ async def node_specialist(state: WorkflowState) -> WorkflowState:
     # derive candidate diseases from multi-disease screening
     ia = state.get("image_analysis", {})
     md = ia.get("diseases")
-    candidates: List[str] = []
-    if isinstance(md, dict):
-        def _to_float(x):
-            try:
-                return float(x)
-            except Exception:
-                return 0.0
-        candidates = [k for k, v in md.items() if _to_float(v) > 0.3][:5]
+    # Fallback: if IA did not produce diseases, try orchestrator screening results
+    if (not isinstance(md, dict) or not md) and isinstance(state.get("orchestrator_outputs"), dict):
+        try:
+            scr = (state.get("orchestrator_outputs") or {}).get("screening_results") or []
+            if scr:
+                out = (scr[0] or {}).get("output")
+                if isinstance(out, dict):
+                    cand = out.get("probabilities") if isinstance(out.get("probabilities"), dict) else out
+                    if isinstance(cand, dict):
+                        md = cand
+        except Exception:
+            pass
+    sel = get_specialist_selection_settings()
+    candidates: List[str] = get_candidate_diseases_from_probs(md, threshold=sel["candidate_threshold"], top_k=sel["candidate_top_k"])
     state["candidate_diseases"] = candidates
 
     trace = state.get("trace") or TraceLogger()
@@ -304,6 +312,12 @@ async def node_report(state: WorkflowState) -> WorkflowState:
     return state
 
 def compile_graph():
+    # Deprecated env toggles: prefer config.settings.get_workflow_mode()
+    if "EYEAGENT_UNIFIED" in os.environ:
+        logger.warning("[workflow] EYEAGENT_UNIFIED is deprecated; prefer config.workflow.mode=unified in eyeagent.yml")
+    if "EYEAGENT_USE_LANGGRAPH" in os.environ:
+        logger.warning("[workflow] EYEAGENT_USE_LANGGRAPH is deprecated; use config.workflow.mode=graph instead")
+
     use_langgraph = _LANGGRAPH_AVAILABLE and os.getenv("EYEAGENT_USE_LANGGRAPH", "1").lower() in ("1", "true", "yes")
     logger.debug(f"[workflow] compile_graph use_langgraph={use_langgraph}")
     # Always ensure built-ins are registered before graph assembly
@@ -341,7 +355,7 @@ def compile_graph():
 
     # Unified mode: single agent does end-to-end
     if os.getenv("EYEAGENT_UNIFIED", "0").lower() in ("1", "true", "yes"):
-        logger.info("[workflow] execution_mode=unified")
+        logger.info("[workflow] execution_mode=unified (env override)")
         return _make_unified_graph()
 
     # Optional: static pipeline override (comma-separated class/role names), bypassing orchestrator

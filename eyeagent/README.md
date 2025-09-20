@@ -52,9 +52,16 @@ All agents share a diagnostic base that handles MCP tool calls with trace loggin
 Environment knobs:
 - EYEAGENT_LOG_LEVEL, EYEAGENT_LOG_FILE, EYEAGENT_LOG_FORMAT
 - EYEAGENT_DRY_RUN=1 to bypass real MCP calls and LLM planning/reasoning
-- EYEAGENT_USE_LANGGRAPH=1 to prefer LangGraph; 0 uses a simple fallback runner
+- EYEAGENT_USE_LANGGRAPH=1 to prefer LangGraph; 0 uses a simple fallback runner (deprecated; prefer config)
 - EYEAGENT_PIPELINE_PROFILE selects a pipeline from pipelines.yml (optional)
 - EYEAGENT_MCP_ADAPTER_BIND=1 to use langchain-mcp-adapters tool binding
+
+Workflow mode precedence:
+- Preferred: set `workflow.mode` in `eyeagent/config/eyeagent.yml` (values: unified | graph | interaction | profile)
+- Env overrides (deprecated but kept for compatibility):
+  - `EYEAGENT_UNIFIED=1` forces unified mode
+  - `EYEAGENT_USE_LANGGRAPH=1` prefers LangGraph when available
+The config value takes precedence when present; env toggles will emit deprecation warnings.
 
 ## Development notes
 - CLI entrypoints:
@@ -118,6 +125,13 @@ You can adapt these callables to wrap your existing agents (`eyeagent/agents/*.p
 - Tests: `eyeagent/tests/test_smoke_dry_run.py` (uses dry run)
 - Tracing: `eyeagent/tracing/trace_logger.py`
 - MCP registry: `eyeagent/tools/tool_registry.py` (+ overlay)
+
+  ### Examples (non-core)
+  - Generic multi-agent + MCP demo lives in the repository top-level `examples/` only.
+  - In-package re-exports/shims have been removed to avoid duplication.
+  - Launch the demo UI (optional):
+    - Run the top-level script: `python examples/run_multiagent.py`
+      - Note: In-package shims `eyeagent/run_multiagent.py` and `eyeagent/multiagent_framework.py` were removed. Use the examples at repo root.
 
 ## MCP tool expectations (examples)
 - classification:modality (CFP/OCT/FFA), classification:laterality, classification:cfp_quality

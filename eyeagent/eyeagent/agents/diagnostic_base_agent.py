@@ -133,6 +133,24 @@ class DiagnosticBaseAgent:
     def run(self, context: Dict[str, Any]) -> Dict[str, Any]:
         return asyncio.run(self.a_run(context))
 
+    # ---- common helpers for per-image tool invocation ----------------------
+    async def call_tool_per_image(self, client: Client | None, tool_id: str, images: List[Dict[str, Any]], arguments: Dict[str, Any] | None = None) -> List[Dict[str, Any]]:
+        """Call a tool for each image (or once if images empty) and attach image_id.
+
+        When client is None (dry-run context manager yields None), _call_tool handles dry-run.
+        """
+        calls: List[Dict[str, Any]] = []
+        img_list = images if images else [None]
+        for img in img_list:
+            args = dict(arguments or {})
+            if isinstance(img, dict) and img.get("path"):
+                args.setdefault("image_path", img.get("path"))
+            tc = await self._call_tool(client, tool_id, args)
+            if isinstance(img, dict):
+                tc["image_id"] = img.get("image_id") or img.get("path")
+            calls.append(tc)
+        return calls
+
     async def plan_tools(self, task_desc: str, available: List[str]) -> List[Dict[str, Any]]:
         """LLM planner: propose ordered tool calls with optional arguments.
 
