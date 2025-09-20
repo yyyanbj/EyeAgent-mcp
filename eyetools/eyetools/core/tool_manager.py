@@ -10,7 +10,7 @@ from .registry import ToolRegistry, ToolMeta
 from .process_manager import ProcessManager
 from .env_manager import EnvManager
 from .errors import ToolNotFoundError, PredictionError
-from .logging import core_logger
+from .logging import core_logger, summarize_for_log
 import time
 import sys
 from pathlib import Path
@@ -200,7 +200,11 @@ class ToolManager:
             except Exception as e:  # noqa
                 raise PredictionError(str(e)) from e
             latency = (time.time() - start) * 1000.0
-            core_logger.debug(f"predict inproc tool_id={meta.id} latency_ms={latency:.2f}")
+            try:
+                preview = summarize_for_log(result)
+            except Exception:
+                preview = {"type": "unprintable"}
+            core_logger.info("predict result tool_id=%s mode=inproc latency_ms=%.2f preview=%s", meta.id, latency, preview)
             m = self._metrics.setdefault(meta.id, {"predict_count": 0, "total_latency_ms": 0.0, "last_latency_ms": 0.0})
             m["predict_count"] += 1
             m["total_latency_ms"] += latency
@@ -217,13 +221,18 @@ class ToolManager:
             if not resp.get("ok"):
                 raise PredictionError(resp.get("error"))
             latency = (time.time() - start) * 1000.0
-            core_logger.debug(f"predict subprocess tool_id={meta.id} latency_ms={latency:.2f}")
+            data = resp.get("data")
+            try:
+                preview = summarize_for_log(data)
+            except Exception:
+                preview = {"type": "unprintable"}
+            core_logger.info("predict result tool_id=%s mode=subprocess latency_ms=%.2f preview=%s", meta.id, latency, preview)
             m = self._metrics.setdefault(meta.id, {"predict_count": 0, "total_latency_ms": 0.0, "last_latency_ms": 0.0})
             m["predict_count"] += 1
             m["total_latency_ms"] += latency
             m["last_latency_ms"] = latency
             m["avg_latency_ms"] = m["total_latency_ms"] / m["predict_count"]
-            return resp.get("data")
+            return data
         else:
             raise ValueError(f"Unknown load_mode {load_mode}")
 
@@ -252,6 +261,10 @@ class ToolManager:
                         tele.update({k: v for k, v in data.items() if isinstance(v, (int, float, str, type(None), bool))})
                         self._last_warmup[tool_id] = time.time()
                     result.update({"status": "ok", "warmup": data})
+                    try:
+                        core_logger.info("warmup result tool_id=%s mode=subprocess preview=%s", tool_id, summarize_for_log(data))
+                    except Exception:
+                        pass
                 else:
                     result.update({"status": "error", "error": resp.get("error")})
             else:  # inproc
@@ -263,6 +276,10 @@ class ToolManager:
                         if isinstance(data, dict):
                             tele.update({k: v for k, v in data.items() if isinstance(v, (int, float, str, type(None), bool))})
                             self._last_warmup[tool_id] = time.time()
+                        try:
+                            core_logger.info("warmup result tool_id=%s mode=inproc preview=%s", tool_id, summarize_for_log(data))
+                        except Exception:
+                            pass
                     except Exception as e:  # noqa
                         result.update({"status": "error", "error": str(e)})
                         return result
