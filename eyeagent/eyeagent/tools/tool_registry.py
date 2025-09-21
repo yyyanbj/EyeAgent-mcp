@@ -9,6 +9,7 @@ from typing import Dict, Any, List, Optional
 import os
 import json
 from loguru import logger
+from typing import Tuple
 
 # Tool IDs match MCP tool names for simplicity
 TOOL_REGISTRY: Dict[str, Dict[str, Any]] = {
@@ -208,6 +209,32 @@ TOOL_REGISTRY: Dict[str, Dict[str, Any]] = {
         "desc_long": "Segments lesion regions in FFA images."
     },
 
+    # Knowledge/RAG tools
+    "rag:query": {
+        "mcp_name": "rag:query",
+        "version": "1.0.0",
+        "role": "knowledge",
+        "desc": "Query internal ophthalmology knowledge base (RAG)",
+        "args_schema": {"type": "object", "properties": {"query": {"type": "string"}, "top_k": {"type": "integer"}}, "required": ["query"]},
+        "desc_long": "Retrieves top relevant passages/documents from an ophthalmology corpus to support decisions."
+    },
+    "web_search:pubmed": {
+        "mcp_name": "web_search:pubmed",
+        "version": "1.0.0",
+        "role": "knowledge",
+        "desc": "Search PubMed for ophthalmology literature",
+        "args_schema": {"type": "object", "properties": {"query": {"type": "string"}, "top_k": {"type": "integer"}}, "required": ["query"]},
+        "desc_long": "Queries PubMed and returns recent and relevant studies."
+    },
+    "web_search:tavily": {
+        "mcp_name": "web_search:tavily",
+        "version": "1.0.0",
+        "role": "knowledge",
+        "desc": "Web search via Tavily API",
+        "args_schema": {"type": "object", "properties": {"query": {"type": "string"}, "top_k": {"type": "integer"}}, "required": ["query"]},
+        "desc_long": "General web search tool to supplement knowledge when RAG isn't sufficient."
+    },
+
     # Disease-specific classification (subset shown)
     # All listed in the provided tool list are mapped 1:1
     **{tid: {
@@ -255,6 +282,63 @@ TOOL_REGISTRY: Dict[str, Dict[str, Any]] = {
         "disease_specific_cls:viral_retinitis_finetune",
     ]}
 }
+
+# Basic disease name/abbreviation mapping to enrich disease_specific results.
+# Keys are upper tokens (normalized) without suffixes like _FINETUNE or numeric tails.
+_DISEASE_NAME_MAP: Dict[str, Tuple[str, str]] = {
+    "DR": ("Diabetic Retinopathy", "DR"),
+    "AMD": ("Age-related Macular Degeneration", "AMD"),
+    "RVO": ("Retinal Vein Occlusion", "RVO"),
+    "RD": ("Retinal Detachment", "RD"),
+    "CNV": ("Choroidal Neovascularization", "CNV"),
+    "PCV": ("Polypoidal Choroidal Vasculopathy", "PCV"),
+    "ERM": ("Epiretinal Membrane", "ERM"),
+    "AION": ("Anterior Ischemic Optic Neuropathy", "AION"),
+    "CSCR": ("Central Serous Chorioretinopathy", "CSCR"),
+    "VKH": ("Vogt–Koyanagi–Harada disease", "VKH"),
+    "VHL": ("Von Hippel–Lindau disease", "VHL"),
+    "ROP": ("Retinopathy of Prematurity", "ROP"),
+    "RP": ("Retinitis Pigmentosa", "RP"),
+    "MH": ("Macular Hole", "MH"),
+    "GLAUCOMA": ("Glaucoma", "GLC"),
+    "KERATOCONUS": ("Keratoconus", "KC"),
+    "NUCLEAR CATARACT": ("Nuclear Cataract", "NC"),
+    "CORNEAL ULCER": ("Corneal Ulcer", "CU"),
+    # Fallbacks will be generated heuristically
+}
+
+def _humanize(s: str) -> str:
+    s = s.replace("_", " ").strip()
+    return " ".join(w.capitalize() if w else w for w in s.split())
+
+def disease_names_for_tool(tool_id: str) -> Dict[str, str]:
+    """Return {'full': ..., 'abbr': ...} derived from a disease_specific tool_id.
+
+    Heuristics:
+    - Parse token after 'disease_specific_cls:' and before optional suffix like '_finetune'
+    - Try uppercase map; fallback to humanized full name and acronym abbreviation.
+    """
+    try:
+        if not isinstance(tool_id, str) or not tool_id.startswith("disease_specific_cls:"):
+            return {}
+        token = tool_id.split(":", 1)[1]
+        token = token.rsplit("_finetune", 1)[0]
+        # Remove trailing _<digit> variants (e.g., nuclear_cataract_4)
+        import re
+        token = re.sub(r"_\d+$", "", token)
+        up = token.replace("_", " ").upper()
+        if up in _DISEASE_NAME_MAP:
+            full, abbr = _DISEASE_NAME_MAP[up]
+            return {"full": full, "abbr": abbr}
+        # Common composite mapping attempts
+        if "NUCLEAR" in up and "CATARACT" in up:
+            return {"full": "Nuclear Cataract", "abbr": "NC"}
+        # Generic fallback: humanize and build acronym
+        full = _humanize(token)
+        abbr = "".join(w[0].upper() for w in full.split() if w and w[0].isalpha())[:5]
+        return {"full": full, "abbr": abbr}
+    except Exception:
+        return {}
 
 
 def _deep_merge(a: Dict[str, Any], b: Dict[str, Any]) -> Dict[str, Any]:

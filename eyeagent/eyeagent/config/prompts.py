@@ -24,6 +24,11 @@ DEFAULT_PROMPTS: Dict[str, Any] = {
             "You are the follow-up agent. Combine disease grades and patient age to suggest follow-up interval and referrals. "
             "Return a short plan and a one-paragraph rationale."
         ),
+        "KnowledgeAgent": (
+            "You are the knowledge agent. Given tentative diagnoses and key findings, craft succinct queries, "
+            "retrieve relevant evidence from internal RAG and optionally web search (PubMed), and summarize citations "
+            "into a concise, clinically-relevant narrative."
+        ),
         "ReportAgent": (
             "You are the report agent. Consolidate findings into a final summary paragraph for clinicians, "
             "including diagnoses and management recommendations."

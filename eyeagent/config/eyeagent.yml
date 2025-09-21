@@ -1,0 +1,61 @@
+# EyeAgent configuration overrides
+# This file is merged onto built-in defaults in eyeagent/config/settings.py
+# Precedence for locating this file:
+# - EYEAGENT_CONFIG_FILE (exact path)
+# - EYEAGENT_CONFIG_DIR/eyeagent.yml
+# - <repo_root>/eyeagent/config/eyeagent.yml (this file)
+# - <repo_root>/config/eyeagent.yml (legacy)
+
+workflow:
+  # Options: unified | profile | graph | interaction
+  # - unified: single UnifiedAgent handles everything
+  # - profile: use pipelines.yml profiles (recommended for multi-agent)
+  # - graph/interaction: advanced modes, optional
+  mode: profile
+  specialist:
+    # Candidate selection for SpecialistAgent when screening probabilities are available
+    candidate_threshold: 0.3  # pick diseases with prob >= 0.3
+    candidate_top_k: 5        # or take top-K if many
+
+# LLM settings (used by planning/reasoning where applicable)
+llm:
+  default:
+    # These can be left empty to read from env:
+    #   OPENAI_API_KEY / DEEPSEEK_API_KEY
+    #   OPENAI_BASE_URL (or AGENT_LLM_BASE_URL)
+    #   OPENAI_MODEL (or AGENT_LLM_MODEL)
+    base_url: ${OPENAI_BASE_URL}
+    model: ${OPENAI_MODEL}
+    temperature: 1.0
+    max_tokens: 64000
+  agents:
+    # Per-agent overrides (uncomment to customize)
+    # OrchestratorAgent:
+    #   model: gpt-4o-mini
+    # ImageAnalysisAgent:
+    #   temperature: 0.2
+
+# Optional tool filters by agent class name
+# Remove or adjust as needed
+tools_filter:
+  OrchestratorAgent:
+    include: ["classification:(modality|laterality|multidis)"]
+  ImageAnalysisAgent:
+    include:
+      - "classification:cfp_quality"
+      - "segmentation:cfp_.*"
+      - "segmentation:oct_.*"
+      - "segmentation:ffa_.*"
+  SpecialistAgent:
+    include: ["disease_specific_cls:.*"]
+  FollowUpAgent:
+    include: ["classification:cfp_age"]
+  KnowledgeAgent:
+    include: ["rag:query", "web_search:.*"]
+
+# Notes:
+# - Cases output dir is controlled via env vars:
+#     EYEAGENT_CASES_DIR (absolute path) or EYEAGENT_DATA_DIR (uses <DATA_DIR>/cases)
+# - To select a pipeline profile at runtime, set env:
+#     EYEAGENT_PIPELINE_PROFILE=default
+#   Profiles are defined in eyeagent/config/pipelines.yml

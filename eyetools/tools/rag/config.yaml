@@ -1,0 +1,36 @@
+package: rag
+entry: tool_impl:RAGQueryTool
+# Do NOT set category here; discovery will infer from folder (tools/rag) to keep id as 'rag:query'
+shared:
+  environment_ref: py312
+  runtime:
+    load_mode: auto
+    idle_timeout_s: 600
+    device_policy: auto
+    preload: false
+  io:
+    input_schema:
+      query: string
+      top_k: integer
+    output_schema:
+      items: array
+      source: string
+  model_defaults:
+    precision: auto
+    lazy: true
+variants:
+  - variant: query
+    version: 0.1.0
+    params:
+      top_k: 5
+      # default corpus directories (relative paths allowed). Override via env or server tool config.
+      corpus_dirs:
+        - ../../eyeagent/docs
+        - ../../eyetools/docs
+        - ../../README.md
+metadata:
+  authors: ["EyeAgent Team"]
+  license: Apache-2.0
+  description: Lightweight local RAG query over markdown/txt files.
+notes:
+  - 0.1.0 initial rag:query tool

@@ -80,10 +80,43 @@ class SpecialistAgent(DiagnosticBaseAgent):
                     if tc.get("status") == "success":
                         meta = get_tool(tool_id) or {}
                         output = tc.get("output") or {}
+                        disease_name = meta.get("disease") or tool_id.split(":")[-1]
+                        # Normalize diverse tool outputs to unified fields expected by UI (grade, confidence)
+                        grade = output.get("grade") if isinstance(output, dict) else None
+                        confidence = output.get("confidence") if isinstance(output, dict) else None
+                        if isinstance(output, dict) and (grade is None or confidence is None):
+                            # Try disease_specific schema: probability/predicted/all_probabilities
+                            probs = output.get("all_probabilities") if isinstance(output.get("all_probabilities"), dict) else None
+                            prob = output.get("probability")
+                            predicted = output.get("predicted")
+                            # Prefer explicit class probabilities
+                            if probs:
+                                try:
+                                    # pick top label by probability
+                                    items = sorted(probs.items(), key=lambda kv: float(kv[1] or 0.0), reverse=True)
+                                except Exception:
+                                    items = list(probs.items())
+                                if items:
+                                    top_label, top_prob = items[0]
+                                    # If label equals disease name, map to positive/negative based on threshold predicate if available
+                                    if top_label == disease_name:
+                                        grade = grade or ("positive" if (predicted is True or (isinstance(prob, (int, float)) and prob >= 0.5)) else "negative")
+                                        confidence = confidence if confidence is not None else float(prob if isinstance(prob, (int, float)) else top_prob)
+                                    else:
+                                        # Multi-class case: use top label as grade directly
+                                        grade = grade or str(top_label)
+                                        try:
+                                            confidence = confidence if confidence is not None else float(top_prob)
+                                        except Exception:
+                                            pass
+                            elif isinstance(prob, (int, float)):
+                                # Binary scalar prob
+                                grade = grade or ("positive" if (predicted is True or prob >= 0.5) else "negative")
+                                confidence = confidence if confidence is not None else float(prob)
                         entry = {
-                            "disease": meta.get("disease") or tool_id.split(":")[-1],
-                            "grade": output.get("grade") if isinstance(output, dict) else None,
-                            "confidence": output.get("confidence") if isinstance(output, dict) else None,
+                            "disease": disease_name,
+                            "grade": grade,
+                            "confidence": confidence,
                             "tool_id": tool_id
                         }
                         if isinstance(img, dict):

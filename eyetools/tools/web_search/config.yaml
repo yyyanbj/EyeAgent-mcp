@@ -1,0 +1,35 @@
+package: web_search
+entry: tool_impl:WebSearchTool
+shared:
+  environment_ref: py312
+  runtime:
+    load_mode: auto
+    idle_timeout_s: 600
+    device_policy: auto
+    preload: false
+  io:
+    input_schema:
+      query: string
+      top_k: integer
+    output_schema:
+      items: array
+      source: string
+  model_defaults:
+    lazy: true
+variants:
+  - variant: pubmed
+    version: 0.1.0
+    params:
+      provider: pubmed
+      top_k: 3
+  - variant: tavily
+    version: 0.1.0
+    params:
+      provider: tavily
+      top_k: 3
+metadata:
+  authors: ["EyeAgent Team"]
+  license: Apache-2.0
+  description: Simple web search wrappers (PubMed API and Tavily). Falls back to local no-net mode.
+notes:
+  - 0.1.0 initial web_search tools

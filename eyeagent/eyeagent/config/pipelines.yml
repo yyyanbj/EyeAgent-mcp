@@ -1,0 +1,9 @@
+profiles:
+  default:
+    steps:
+      - name: orchestrator
+      - name: image_analysis
+      - name: specialist
+      - name: knowledge
+      - name: follow_up
+      - name: report

@@ -21,7 +21,7 @@ uv sync
 uv run eyeagent-diagnose --patient '{"patient_id":"P001","age":63}' --images '[{"image_id":"IMG001","path":"/data/cfp1.jpg"}]'
 ```
 
-4) Or launch the UI:
+4) Or launch the UI (multi-agent via profile):
 ```bash
 uv run eyeagent-ui
 
@@ -34,11 +34,18 @@ uv run eyeagent-ui --mcp-url http://localhost:8000/mcp/ --port 7860
 
 Outputs are written to cases/<case_id> by default (trace.json, final_report.json). Override with EYEAGENT_CASES_DIR or EYEAGENT_DATA_DIR.
 
+5) Optional: run the ophthalmology demo (includes knowledge step):
+
+```bash
+uv run python -m eyeagent.run_ophthalmology_demo
+```
+
 ## Architecture (agents)
 - Orchestrator: infers modality/laterality and plans the pipeline
 - ImageAnalysis: quality and segmentation per modality, optional multidisease screening
 - Specialist: disease-specific grading based on candidates
 - FollowUp: management plan based on grades and patient data
+- Knowledge: queries internal RAG and optionally PubMed for evidence and summaries
 - Report: consolidates everything into a clinician-friendly report
 
 All agents share a diagnostic base that handles MCP tool calls with trace logging and optional LLM reasoning. See `eyeagent/agents/` for details.
@@ -46,8 +53,24 @@ All agents share a diagnostic base that handles MCP tool calls with trace loggin
 ## Configuration
 - Prompts: `eyeagent/config/prompts.yml` (override system prompts, UI presets)
 - Tools overlay: `eyeagent/config/tools.yml` (add/override tool metadata)
-- Pipeline profiles: `eyeagent/config/pipelines.yml` (conditional step lists)
-- Global settings (LLM): `eyeagent/config/eyeagent.yml`
+- Pipeline profiles: `eyeagent/config/pipelines.yml` (conditional step lists); default profile includes `knowledge` between specialist and follow_up
+- Global settings (LLM & workflow mode): `eyeagent/config/eyeagent.yml`
+
+Recommended multi-agent setup:
+
+1) Ensure `eyeagent/config/eyeagent.yml` contains:
+
+```
+workflow:
+  mode: profile
+```
+
+2) Run the UI with the default profile:
+
+```bash
+export EYEAGENT_PIPELINE_PROFILE=default
+uv run eyeagent-ui --mcp-url "http://localhost:8000/mcp" --port 7860
+```
 
 Environment knobs:
 - EYEAGENT_LOG_LEVEL, EYEAGENT_LOG_FILE, EYEAGENT_LOG_FORMAT
@@ -55,6 +78,7 @@ Environment knobs:
 - EYEAGENT_USE_LANGGRAPH=1 to prefer LangGraph; 0 uses a simple fallback runner (deprecated; prefer config)
 - EYEAGENT_PIPELINE_PROFILE selects a pipeline from pipelines.yml (optional)
 - EYEAGENT_MCP_ADAPTER_BIND=1 to use langchain-mcp-adapters tool binding
+ - MCP_SERVER_URL to point agents to your MCP server (the UI flag --mcp-url sets this for the process)
 
 Workflow mode precedence:
 - Preferred: set `workflow.mode` in `eyeagent/config/eyeagent.yml` (values: unified | graph | interaction | profile)
@@ -137,6 +161,12 @@ You can adapt these callables to wrap your existing agents (`eyeagent/agents/*.p
 - classification:modality (CFP/OCT/FFA), classification:laterality, classification:cfp_quality
 - segmentation:cfp_* and segmentation:oct_* tools for lesion detection
 - disease-specific grading tools for Specialist (e.g., DR, AMD, etc.)
+
+Knowledge step tools (add to your MCP server):
+- rag:query → returns top-k passages from your internal ophthalmology corpus
+- web_search:pubmed → returns recent/relevant PubMed references
+
+You can map/override tool IDs and descriptions in `eyeagent/config/tools.yml`.
 
 If your server uses different names, use `eyeagent/config/tools.yml` to map and augment metadata.
 

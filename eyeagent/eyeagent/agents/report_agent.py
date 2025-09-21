@@ -26,6 +26,7 @@ class ReportAgent(DiagnosticBaseAgent):
         image_analysis = context.get("image_analysis") or {}
         specialist = context.get("specialist") or {}
         follow_up = context.get("follow_up") or {}
+        knowledge = context.get("knowledge") or {}
 
         # Prefer per-image specialist grading if available
         per_sp = (specialist.get("per_image") or {}).get("disease_grades") or {}
@@ -56,12 +57,15 @@ class ReportAgent(DiagnosticBaseAgent):
         # optional upstream narratives
         ia_narr = (context.get("image_analysis") or {}).get("narrative")
         sp_narr = (context.get("specialist") or {}).get("narrative")
+        kn_narr = (context.get("knowledge") or {}).get("narrative")
         fu_narr = (context.get("follow_up") or {}).get("narrative")
         narrative_parts = []
         if ia_narr:
             narrative_parts.append(str(ia_narr))
         if sp_narr:
             narrative_parts.append(str(sp_narr))
+        if kn_narr:
+            narrative_parts.append(str(kn_narr))
         # If per-image narratives are ever added, they can be merged here as well
         # Compose final summary paragraph and conclusion, then polish via LLM
         final_sentence = []
@@ -92,7 +96,8 @@ class ReportAgent(DiagnosticBaseAgent):
             "per_image": {
                 "lesions": lesions if isinstance(lesions, dict) else None,
                 "specialist": per_sp or None,
-            }
+            },
+            "knowledge": knowledge or None,
         }
         self.trace_logger.append_event(self.case_id, {
             "type": "agent_step",

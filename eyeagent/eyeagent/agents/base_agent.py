@@ -99,16 +99,17 @@ class BaseAgent:
             mock: Dict[str, Any] = {"mock": True}
             try:
                 if role == "specialist":
-                    mock.update({"grade": "ungraded", "confidence": 0.0})
+                    mock.update({"disease": meta.get("disease") or "unknown", "probability": 0.0, "predicted": False, "all_probabilities": {"negative": 1.0}, "grade": "ungraded", "confidence": 0.0})
                 elif isinstance(tool_id, str) and tool_id.startswith("classification:cfp_quality"):
                     mock.update({"prediction": "unknown"})
                 elif isinstance(tool_id, str) and tool_id.startswith("segmentation:"):
                     mock.update({"counts": {}})
             except Exception:
                 pass
-            event = {**event_base, "status": "success", "output": mock, "dry_run": True}
+            std = self._standardize_output(tool_id, mock, meta)
+            event = {**event_base, "status": "success", "output": std, "dry_run": True}
             self.trace_logger.append_event(self.case_id, event)
-            return {"tool_id": tool_id, "output": mock, "status": "success", "version": meta.get("version") if meta else None}
+            return {"tool_id": tool_id, "output": std, "status": "success", "version": meta.get("version") if meta else None}
         try:
             if not meta:
                 raise ValueError(f"Unknown tool_id={tool_id}")
@@ -116,9 +117,10 @@ class BaseAgent:
             with tool_timer(tool_id):
                 raw = await client.call_tool(name=meta["mcp_name"], arguments=arguments)
             output = self._normalize_tool_result(raw)
-            event = {**event_base, "status": "success", "output": output}
+            std = self._standardize_output(tool_id, output, meta)
+            event = {**event_base, "status": "success", "output": std}
             self.trace_logger.append_event(self.case_id, event)
-            return {"tool_id": tool_id, "output": output, "status": "success", "version": meta.get("version")}
+            return {"tool_id": tool_id, "output": std, "status": "success", "version": meta.get("version")}
         except Exception as e:
             event = {**event_base, "status": "failed", "error": str(e)}
             self.trace_logger.append_event(self.case_id, event)
@@ -411,6 +413,123 @@ class BaseAgent:
             return data
         except Exception:
             return str(data)
+
+    def _standardize_output(self, tool_id: str, output: Any, meta: Dict[str, Any] | None = None) -> Any:
+        """Standardize tool outputs into a consistent shape while keeping original keys.
+
+        Adds common fields and aligns synonyms:
+        - kind: classification | disease_specific | segmentation
+        - tool_id: original tool id
+        - probabilities: preferred dict for label->prob (copied from all_probabilities when present)
+        - label: unified single-label name (copied from prediction when present)
+        Keeps original fields to avoid breaking downstream code.
+        """
+        try:
+            if not isinstance(output, dict):
+                # Wrap non-dict into a minimal envelope
+                return {"kind": None, "tool_id": tool_id, "value": output}
+            out = dict(output)  # shallow copy
+            kind: Optional[str] = None
+            # Infer kind from tool_id prefix or meta
+            if isinstance(tool_id, str):
+                if tool_id.startswith("classification:"):
+                    kind = "classification"
+                elif tool_id.startswith("disease_specific_cls:"):
+                    kind = "disease_specific"
+                elif tool_id.startswith("segmentation:"):
+                    kind = "segmentation"
+            if not kind and meta and meta.get("role") == "specialist":
+                kind = "disease_specific"
+            out.setdefault("tool_id", tool_id)
+            if kind:
+                out.setdefault("kind", kind)
+
+            # Configurable max classes to keep in probabilities (for readability)
+            try:
+                max_classes = int(os.getenv("EYEAGENT_MAX_CLASSES", "8"))
+            except Exception:
+                max_classes = 8
+
+            # Harmonize common fields
+            # classification: prefer label; accept prediction as alias
+            if kind == "classification":
+                if "label" not in out and isinstance(out.get("prediction"), str):
+                    out["label"] = out.get("prediction")
+                # Some classifiers return {probabilities: {...}}; if missing but all_probabilities present, copy
+                if "probabilities" not in out and isinstance(out.get("all_probabilities"), dict):
+                    out["probabilities"] = dict(out.get("all_probabilities") or {})
+                # Compute top-1 prediction if probabilities available
+                probs = out.get("probabilities") if isinstance(out.get("probabilities"), dict) else None
+                if probs and not out.get("predicted_label"):
+                    try:
+                        top = max(probs.items(), key=lambda kv: float(kv[1] or 0))
+                        out["predicted_label"], out["predicted_prob"] = top[0], float(top[1] or 0)
+                    except Exception:
+                        pass
+                # Trim probabilities to Top-K for compactness (sorted desc)
+                if probs and isinstance(probs, dict):
+                    try:
+                        items = sorted(probs.items(), key=lambda kv: float(kv[1] or 0), reverse=True)[:max_classes]
+                        out["probabilities"] = {k: v for k, v in items}
+                    except Exception:
+                        pass
+
+            # disease specific: copy all_probabilities -> probabilities; ensure probability/predicted
+            if kind == "disease_specific":
+                if "probabilities" not in out and isinstance(out.get("all_probabilities"), dict):
+                    out["probabilities"] = dict(out.get("all_probabilities") or {})
+                # Derive probability if only probabilities provided for binary cases
+                if "probability" not in out and isinstance(out.get("probabilities"), dict):
+                    try:
+                        # Heuristic: use max probability as main probability
+                        max_prob = max(float(v) for v in out["probabilities"].values() if v is not None)
+                        out["probability"] = max_prob
+                    except Exception:
+                        pass
+                if "predicted" not in out and isinstance(out.get("probability"), (int, float)):
+                    try:
+                        out["predicted"] = bool(float(out.get("probability")) >= 0.5)
+                    except Exception:
+                        pass
+                # Compute predicted_label/predicted_prob from probabilities when present
+                probs = out.get("probabilities") if isinstance(out.get("probabilities"), dict) else None
+                if probs and not out.get("predicted_label"):
+                    try:
+                        top = max(probs.items(), key=lambda kv: float(kv[1] or 0))
+                        out["predicted_label"], out["predicted_prob"] = top[0], float(top[1] or 0)
+                    except Exception:
+                        pass
+                # Attach disease names (full/abbr) based on tool_id
+                try:
+                    from ..tools.tool_registry import disease_names_for_tool  # type: ignore
+                    names = disease_names_for_tool(tool_id)
+                    if names:
+                        out.setdefault("disease_names", names)
+                        # Ensure top-level disease string is set
+                        if not out.get("disease") and names.get("abbr"):
+                            out["disease"] = names.get("abbr")
+                except Exception:
+                    pass
+                # Trim probabilities to Top-K
+                if probs and isinstance(probs, dict):
+                    try:
+                        items = sorted(probs.items(), key=lambda kv: float(kv[1] or 0), reverse=True)[:max_classes]
+                        out["probabilities"] = {k: v for k, v in items}
+                    except Exception:
+                        pass
+
+            # segmentation: carry counts/areas/output_paths as-is; attach totals
+            if kind == "segmentation":
+                counts = out.get("counts") if isinstance(out.get("counts"), dict) else None
+                if counts and "total_regions" not in out:
+                    try:
+                        out["total_regions"] = sum(int(v) for v in counts.values() if v is not None)
+                    except Exception:
+                        pass
+
+            return out
+        except Exception:
+            return output
 
 # Backward-compat alias
 DiagnosticBaseAgent = BaseAgent

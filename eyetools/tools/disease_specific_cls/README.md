@@ -23,6 +23,26 @@ out = tool.predict({"image_path": "examples/test_images/AMD.jpg"})
 print(out)
 ```
 
+## Usage (CLI)
+```bash
+PYTHONPATH=. python - <<'PY'
+from tools.disease_specific_cls.tool_impl import load_tool
+tool = load_tool(
+    "AMD_finetune",
+    weights_root="weights/disease-specific",
+    allow_missing=False,
+    skip_hub=True,
+    device="cuda"
+)
+res = tool.predict({"image_path": "examples/test_images/DR lesion.jpg"})
+print(res)
+PY
+```
+
+curl -X POST "http://127.0.0.1:5789/predict" \
+  -H "Content-Type: application/json" \
+  -d '{"tool_id":"disease-specific:AMD_finetune","request":{"image_path":"examples/test_images/DR lesion.jpg"}}'
+
 ## Prediction Output Schema
 ```json
 {

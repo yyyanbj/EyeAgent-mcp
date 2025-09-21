@@ -53,6 +53,28 @@ DEFAULT_SETTINGS: Dict[str, Any] = {
             "class": "eyeagent.agents.report_agent.ReportAgent",
             "enabled": True,
         },
+        "knowledge": {
+            "class": "eyeagent.agents.knowledge_agent.KnowledgeAgent",
+            "enabled": True,
+        },
+    },
+    # Optional tool filters per agent
+    "tools_filter": {
+        "OrchestratorAgent": {
+            "include": ["classification:(modality|laterality|multidis)"]
+        },
+        "ImageAnalysisAgent": {
+            "include": ["classification:cfp_quality", "segmentation:cfp_.*", "segmentation:oct_.*", "segmentation:ffa_.*"]
+        },
+        "SpecialistAgent": {
+            "include": ["disease_specific_cls:.*"]
+        },
+        "FollowUpAgent": {
+            "include": ["classification:cfp_age"]
+        },
+        "KnowledgeAgent": {
+            "include": ["rag:query", "web_search:.*"]
+        }
     },
 }
 

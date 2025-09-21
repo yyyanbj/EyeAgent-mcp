@@ -249,6 +249,31 @@ async def node_specialist(state: WorkflowState) -> WorkflowState:
     logger.debug("[workflow] exit node_specialist")
     return state
 
+async def node_knowledge(state: WorkflowState) -> WorkflowState:
+    logger.debug("[workflow] enter node_knowledge")
+    trace = state.get("trace") or TraceLogger()
+    state["trace"] = trace
+    case_id = state.get("case_id") or trace.create_case(patient=state.get("patient", {}), images=state.get("images", []))
+    state["case_id"] = case_id
+    cls = get_agent_class("knowledge")
+    if not cls:
+        logger.warning("[workflow] KnowledgeAgent not configured; skipping")
+        return state
+    agent = cls(MCP_SERVER_URL, trace, case_id)  # type: ignore[call-arg]
+    context = dict(state)
+    context["messages"] = state.get("messages", [])
+    if "image_analysis" in state:
+        context["image_analysis"] = state["image_analysis"]
+    if "specialist" in state:
+        context["specialist"] = state["specialist"]
+    with step_timer(agent.__class__.__name__, agent.role):
+        res = await agent.a_run(context)
+    state.setdefault("workflow", []).append(res)
+    _append_messages_from_result(state, res)
+    state["knowledge"] = res["outputs"]
+    logger.debug("[workflow] exit node_knowledge")
+    return state
+
 async def node_followup(state: WorkflowState) -> WorkflowState:
     logger.debug("[workflow] enter node_followup")
     # requires disease_grades
@@ -301,6 +326,8 @@ async def node_report(state: WorkflowState) -> WorkflowState:
         context["image_analysis"] = state["image_analysis"]
     if "specialist" in state:
         context["specialist"] = state["specialist"]
+    if "knowledge" in state:
+        context["knowledge"] = state["knowledge"]
     if "follow_up" in state:
         context["follow_up"] = state["follow_up"]
     with step_timer(agent.__class__.__name__, agent.role):
@@ -454,6 +481,7 @@ def compile_graph():
         g.add_node("orchestrator", node_orchestrator)
         g.add_node("image_analysis", node_image_analysis)
         g.add_node("specialist", node_specialist)
+        g.add_node("knowledge", node_knowledge)
         g.add_node("follow_up", node_followup)
         g.add_node("report", node_report)
 
@@ -471,18 +499,28 @@ def compile_graph():
         # After IA, go to specialist if present
         def after_ia(state: WorkflowState):
             pipeline = state.get("pipeline", [])
-            return "specialist" if "specialist" in pipeline else "report"
+            return "specialist" if "specialist" in pipeline else ("knowledge" if "knowledge" in pipeline else "report")
         g.add_conditional_edges("image_analysis", after_ia, {
             "specialist": "specialist",
-            "report": "report"
+            "knowledge": "knowledge",
+            "report": "report",
         })
         # After specialist, go to follow_up if present
         def after_sp(state: WorkflowState):
             pipeline = state.get("pipeline", [])
-            return "follow_up" if "follow_up" in pipeline else "report"
+            return "knowledge" if "knowledge" in pipeline else ("follow_up" if "follow_up" in pipeline else "report")
         g.add_conditional_edges("specialist", after_sp, {
+            "knowledge": "knowledge",
             "follow_up": "follow_up",
-            "report": "report"
+            "report": "report",
+        })
+        # After knowledge, go to follow_up if present else report
+        def after_knowledge(state: WorkflowState):
+            pipeline = state.get("pipeline", [])
+            return "follow_up" if "follow_up" in pipeline else "report"
+        g.add_conditional_edges("knowledge", after_knowledge, {
+            "follow_up": "follow_up",
+            "report": "report",
         })
         g.add_edge("follow_up", "report")
         g.add_edge("report", END)
@@ -514,7 +552,9 @@ def compile_graph():
             # Specialist if planned
             if "specialist" in pipeline:
                 state = await node_specialist(state)
-
+            # Knowledge if planned
+            if "knowledge" in pipeline:
+                state = await node_knowledge(state)
             # Follow-up if planned
             if "follow_up" in pipeline:
                 state = await node_followup(state)

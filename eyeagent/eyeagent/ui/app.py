@@ -65,7 +65,8 @@ def _wrap_with_avatar(agent: str, role: str, inner_html: str) -> str:
         "    </div>"
         f"    <div style='font-size:12px;color:#5f6368;margin-top:6px;line-height:1.2;word-break:break-word'>{name}{(' ('+role_txt+')') if role_txt else ''}</div>"
         "  </div>"
-        f"  <div style='flex:1'>{inner_html}</div>"
+        # Constrain inner content width for readability inside Chatbot
+        f"  <div style='flex:1; max-width: 900px;'>{inner_html}</div>"
         "</div>"
     )
 
@@ -181,9 +182,12 @@ def _summarize_tool_output(output: Any, max_items: int = 5) -> Optional[str]:
         parts.append(f"<div><strong>Inference time:</strong> {html.escape(str(output.get('inference_time')))}s</div>")
     if isinstance(output.get("message"), str):
         parts.append(f"<div><em>{html.escape(str(output.get('message')))}</em></div>")
-    # classification style
+    # classification style (general)
     preds = output.get("predictions")
     probs = output.get("probabilities")
+    pred_label = output.get("predicted_label")
+    pred_prob = output.get("predicted_prob")
+    # If both present, show aligned top predictions
     if isinstance(preds, list) and probs and isinstance(probs, dict):
         items = []
         for p in preds:
@@ -198,17 +202,74 @@ def _summarize_tool_output(output: Any, max_items: int = 5) -> Optional[str]:
         if items:
             li = "".join([f"<li>{html.escape(k)}: <code>{html.escape(str(v))}</code></li>" for k, v in items])
             parts.append(f"<div><strong>Top predictions:</strong><ul>{li}</ul></div>")
-    # segmentation style counts
+    # If only predictions exist (no probabilities), still show them
+    elif isinstance(preds, list) and preds:
+        li = "".join([f"<li>{html.escape(str(x))}</li>" for x in preds[:max_items]])
+        parts.append(f"<div><strong>Predictions:</strong><ul>{li}</ul></div>")
+    # If only probabilities exist, show top-K directly
+    elif isinstance(probs, dict) and probs:
+        try:
+            items = sorted(probs.items(), key=lambda kv: float(kv[1] or 0), reverse=True)[:max_items]
+        except Exception:
+            items = list(probs.items())[:max_items]
+        li = "".join([f"<li>{html.escape(str(k))}: <code>{html.escape(str(v))}</code></li>" for k, v in items])
+        parts.append(f"<div><strong>Probabilities:</strong><ul>{li}</ul></div>")
+    # Show unified top-1 prediction if available
+    if isinstance(pred_label, str):
+        # If no probability available, omit parentheses
+        if pred_prob is None:
+            parts.append(f"<div><strong>Predicted:</strong> {html.escape(pred_label)}</div>")
+        else:
+            parts.append(f"<div><strong>Predicted:</strong> {html.escape(pred_label)} (<code>{html.escape(str(pred_prob))}</code>)</div>")
+    # Special case: age regression
+    if task == "cfp_age" and output.get("prediction") is not None:
+        val = output.get("prediction")
+        unit = output.get("unit") or "years"
+        parts.append(f"<div><strong>Age:</strong> {html.escape(str(val))} {html.escape(str(unit))}</div>")
+    # segmentation style counts (Top-N by value)
     counts = output.get("counts")
     if isinstance(counts, dict) and counts:
-        li = "".join([f"<li>{html.escape(str(k))}: <code>{html.escape(str(v))}</code></li>" for k, v in list(counts.items())[:max_items]])
-        parts.append(f"<div><strong>Counts:</strong><ul>{li}</ul></div>")
+        try:
+            items = sorted(counts.items(), key=lambda kv: float(kv[1] or 0), reverse=True)[:max_items]
+        except Exception:
+            items = list(counts.items())[:max_items]
+        li = "".join([f"<li>{html.escape(str(k))}: <code>{html.escape(str(v))}</code></li>" for k, v in items])
+        parts.append(f"<div><strong>Top counts:</strong><ul>{li}</ul></div>")
     # areas summary
     areas = output.get("areas")
     if isinstance(areas, dict) and areas:
         keys = list(areas.keys())[:max_items]
         li = "".join([f"<li>{html.escape(str(k))}: <code>{len(areas.get(k) or [])}</code> regions</li>" for k in keys])
         parts.append(f"<div><strong>Areas:</strong><ul>{li}</ul></div>")
+    # disease_specific: append disease label, probability and top labels (always show if present)
+    disease = output.get("disease")
+    names = output.get("disease_names") if isinstance(output.get("disease_names"), dict) else None
+    if isinstance(disease, str) and disease:
+        if names and names.get("full") and names.get("abbr"):
+            parts.append(f"<div><strong>Disease:</strong> {html.escape(names.get('full'))} (<code>{html.escape(names.get('abbr'))}</code>)</div>")
+        else:
+            parts.append(f"<div><strong>Disease:</strong> {html.escape(disease)}</div>")
+    prob = output.get("probability")
+    pred = output.get("predicted")
+    probs_all = output.get("all_probabilities") if isinstance(output.get("all_probabilities"), dict) else None
+    if not probs_all and isinstance(output.get("probabilities"), dict):
+        # Fallback to unified probabilities if present (standardized in BaseAgent)
+        probs_all = output.get("probabilities")
+    if prob is not None:
+        parts.append(f"<div><strong>Probability:</strong> {html.escape(str(prob))} {'(positive)' if pred else ''}</div>")
+    if probs_all:
+        try:
+            items = sorted(probs_all.items(), key=lambda kv: float(kv[1] or 0), reverse=True)[:max_items]
+        except Exception:
+            items = list(probs_all.items())[:max_items]
+        dis = (disease or "").lower() if isinstance(disease, str) else None
+        lis = []
+        for k, v in items:
+            name_html = html.escape(str(k))
+            if dis and str(k).lower() == dis:
+                name_html = f"<strong>{name_html}</strong> <span style='color:#1b5e20;font-size:0.85em'>(current)</span>"
+            lis.append(f"<li>{name_html}: <code>{html.escape(str(v))}</code></li>")
+        parts.append(f"<div><strong>Probabilities:</strong><ul>{''.join(lis)}</ul></div>")
     if not parts:
         return None
     return "".join(parts)

@@ -79,7 +79,7 @@ class OrchestratorAgent(DiagnosticBaseAgent):
             pass
 
         # Dynamic pipeline decision based on modality and screening confidences
-        planned_pipeline = ["image_analysis", "specialist", "follow_up", "report"]
+        planned_pipeline = ["image_analysis", "specialist", "knowledge", "follow_up", "report"]
         screening_results = [c for c in tool_calls if c["tool_id"] == "classification:multidis"]
         modality_label = None
         try:
@@ -118,6 +118,7 @@ class OrchestratorAgent(DiagnosticBaseAgent):
             if "specialist" in planned_pipeline:
                 planned_pipeline.remove("specialist")
                 reasons.append(f"Screening low confidence ({top_prob:.2f}); skipping specialist.")
+            # If specialist is removed, knowledge may still be valuable; keep it
         if not images:
             planned_pipeline = ["report"]
             reasons.append("No images provided; generating report from context only.")
