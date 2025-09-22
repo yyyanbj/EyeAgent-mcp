@@ -152,6 +152,9 @@ class DiseaseSpecificClassificationTool:
                 "probability": "probability of positive class",
                 "predicted": "probability >= threshold",
                 "all_probabilities": "map of class -> probability",
+                "probabilities": "alias of all_probabilities (map of class -> probability)",
+                "prediction": "predicted label (top-1)",
+                "label": "alias of prediction",
                 "inference_time": "seconds",
             },
         }
@@ -338,6 +341,9 @@ class DiseaseSpecificClassificationTool:
                 "probability": float(prob),
                 "predicted": bool(prob >= self.threshold),
                 "all_probabilities": {self.disease_name: float(prob)},
+                "probabilities": {self.disease_name: float(prob)},
+                "prediction": self.disease_name,
+                "label": self.disease_name,
                 "inference_time": round(dur, 4),
             }
         # vector output
@@ -349,27 +355,38 @@ class DiseaseSpecificClassificationTool:
                 "probability": float(prob),
                 "predicted": bool(prob >= self.threshold),
                 "all_probabilities": probs_map,
+                "probabilities": dict(probs_map),
+                "prediction": self.disease_name,
+                "label": self.disease_name,
                 "inference_time": round(dur, 4),
             }
         if logits.shape[0] == 2:
             probs = torch.softmax(logits, dim=0).tolist()
             disease_index = 0  # we put disease first
             prob = probs[disease_index]
+            probs_map = {self.classes[i]: float(p) for i, p in enumerate(probs)}
             return {
                 "disease": self.disease_name,
                 "probability": float(prob),
                 "predicted": bool(prob >= self.threshold),
-                "all_probabilities": {self.classes[i]: float(p) for i, p in enumerate(probs)},
+                "all_probabilities": probs_map,
+                "probabilities": dict(probs_map),
+                "prediction": self.disease_name,
+                "label": self.disease_name,
                 "inference_time": round(dur, 4),
             }
         # multi-class
         probs = torch.softmax(logits, dim=0).tolist()
         top_idx = int(torch.argmax(logits).item())
+        probs_map = {self.classes[i]: float(p) for i, p in enumerate(probs)}
         return {
             "disease": self.disease_name,
             "probability": float(probs[top_idx]),
             "predicted": bool(probs[top_idx] >= self.threshold),
-            "all_probabilities": {self.classes[i]: float(p) for i, p in enumerate(probs)},
+            "all_probabilities": probs_map,
+            "probabilities": dict(probs_map),
+            "prediction": self.classes[top_idx],
+            "label": self.classes[top_idx],
             "inference_time": round(dur, 4),
         }
 

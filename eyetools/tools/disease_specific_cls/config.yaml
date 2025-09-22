@@ -12,8 +12,14 @@ shared:
     input_schema:
       image_path: path
     output_schema:
-      probability: float
-      predicted: bool
+      disease: string
+      probability: number
+      predicted: boolean
+      all_probabilities: object
+      probabilities: object
+      prediction: string
+      label: string
+      inference_time: number
   model_defaults:
     precision: auto
     lazy: true

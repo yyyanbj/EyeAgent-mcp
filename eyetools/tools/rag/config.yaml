@@ -15,6 +15,7 @@ shared:
     output_schema:
       items: array
       source: string
+      inference_time: number
   model_defaults:
     precision: auto
     lazy: true

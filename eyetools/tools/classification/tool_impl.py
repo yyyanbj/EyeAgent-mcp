@@ -68,6 +68,8 @@ class ClassificationTool:
             }
         else:
             out["fields"] = {
+                "prediction": "top-1 predicted category",
+                "label": "alias of prediction (compat)",
                 "predictions": "top-N predicted categories",
                 "probabilities": "map of category -> score",
                 "inference_time": "seconds",
@@ -115,6 +117,7 @@ class ClassificationTool:
         dur = time.time() - start
         if self.task == "cfp_age":
             val = logits.squeeze().cpu().item()
+            # Clamp to a reasonable range to avoid outliers from raw regression
             val = max(40, min(val, 70))
             return {"task": self.task, "prediction": val, "unit": "years", "inference_time": round(dur,4)}
         multilabel = self.task == "multidis"
@@ -129,7 +132,19 @@ class ClassificationTool:
                 filtered = sorted(pairs, key=lambda x: x[1], reverse=True)[: DEFAULT_SHOW_N[self.task]]
         else:
             filtered = sorted(pairs, key=lambda x: x[1], reverse=True)[: DEFAULT_SHOW_N[self.task]]
-        return {"task": self.task, "predictions": [p[0] for p in filtered], "probabilities": {k: round(float(v),3) for k,v in filtered}, "inference_time": round(dur,4)}
+        # Provide a single "prediction" field (top-1 label) for downstream consumers (e.g., UI)
+        top_label = filtered[0][0] if filtered else None
+        out: Dict[str, Any] = {
+            "task": self.task,
+            "prediction": top_label,
+            "predictions": [p[0] for p in filtered],
+            "probabilities": {k: round(float(v), 3) for k, v in filtered},
+            "inference_time": round(dur, 4),
+        }
+        # Also expose an alias 'label' for compatibility with older frontends
+        if top_label is not None:
+            out["label"] = top_label
+        return out
 
 def load_tool(task: str, threshold: float = 0.3, **kw):
     """Backward-compatible factory for direct usage in tests / scripts."""

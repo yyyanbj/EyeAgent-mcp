@@ -12,6 +12,7 @@ class ImageAnalysisAgent(DiagnosticBaseAgent):
     allowed_tool_ids = [
         # CFP
         "classification:cfp_quality",
+        "classification:cfp_age",
         "segmentation:cfp_DR",
         "segmentation:cfp_drusen",
         "segmentation:cfp_cnv",
@@ -38,7 +39,7 @@ class ImageAnalysisAgent(DiagnosticBaseAgent):
     # Capabilities declaration for image analysis
     capabilities = {
         "required_context": ["images", "orchestrator_outputs"],
-        "expected_outputs": ["quality", "lesions", "diseases"],
+        "expected_outputs": ["quality", "age", "lesions", "diseases"],
         "retry_policy": {"max_attempts": 2, "on_fail": "skip"},
         "modalities": ["CFP", "OCT", "FFA"],
         "tools": allowed_tool_ids,
@@ -72,6 +73,7 @@ class ImageAnalysisAgent(DiagnosticBaseAgent):
             if (modality or "").upper() == "CFP" or modality is None:
                 # If modality unknown, default to CFP-friendly pipeline (safe subset)
                 plan.append({"tool_id": "classification:cfp_quality", "arguments": None, "reasoning": "Assess CFP quality."})
+                plan.append({"tool_id": "classification:cfp_age", "arguments": None, "reasoning": "Estimate patient's age from CFP."})
                 for tid in self.allowed_tool_ids:
                     if tid.startswith("segmentation:cfp_"):
                         plan.append({"tool_id": tid, "arguments": None, "reasoning": "Run CFP lesion segmentation."})
@@ -96,6 +98,7 @@ class ImageAnalysisAgent(DiagnosticBaseAgent):
         # Aggregate outputs (simplified)
         # Aggregate per-image
         quality = {}
+        ages = {}
         lesions = {}
         diseases = {}
         for c in tool_calls:
@@ -104,6 +107,10 @@ class ImageAnalysisAgent(DiagnosticBaseAgent):
             img_id = c.get("image_id") or "_"
             if tid == "classification:cfp_quality":
                 quality[img_id] = out
+            if tid == "classification:cfp_age":
+                # Expect {prediction: number, unit: years}
+                if isinstance(out, dict):
+                    ages[img_id] = out.get("prediction")
             if isinstance(tid, str) and tid.startswith("segmentation:"):
                 lesions.setdefault(img_id, {})[tid] = out
             if tid == "classification:multidis":
@@ -152,12 +159,14 @@ class ImageAnalysisAgent(DiagnosticBaseAgent):
                         top_entries.append(f"{img_id}: " + ", ".join([f"{k} {_fmt_prob(v)}" for k, v in tops]))
             top_d_txt = "; ".join(top_entries)
         # Prepare a concise context summary for reasoning; then let LLM polish it
-        base_summary = (
-            "Image analysis summary: "
-            f"image quality is {q_txt}. "
-            f"Segmentation suggests {lesion_txt}. "
-            + (f"Top disease likelihoods: {top_d_txt}." if top_d_txt else "")
-        ).strip()
+        parts: List[str] = [f"Image analysis summary: image quality is {q_txt}."]
+        if ages:
+            age_bits = ", ".join([f"{k}:{v}" for k, v in ages.items()])
+            parts.append(f"Estimated ages: {age_bits}.")
+        parts.append(f"Segmentation suggests {lesion_txt}.")
+        if top_d_txt:
+            parts.append(f"Top disease likelihoods: {top_d_txt}.")
+        base_summary = " ".join(parts).strip()
         reasoning = self.gen_reasoning(base_summary)
         # Merge diseases across images into a single dict (max probability per disease) for backward compatibility
         merged_diseases: Dict[str, Any] = {}
@@ -172,9 +181,10 @@ class ImageAnalysisAgent(DiagnosticBaseAgent):
                         merged_diseases[k] = max(merged_diseases.get(k, 0.0), fv)
         outputs = {
             "quality": quality,
+            "age": ages if ages else None,
             "lesions": lesions,
             "diseases": merged_diseases or diseases,
-            "per_image": {"quality": quality, "lesions": lesions, "diseases": diseases},
+            "per_image": {"quality": quality, "age": ages, "lesions": lesions, "diseases": diseases},
             "narrative": reasoning,
         }
 

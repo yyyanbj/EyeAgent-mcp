@@ -2,7 +2,7 @@ import time
 from fastapi.testclient import TestClient
 
 from eyetools.mcp_server import create_app
-from eyetools.tool_manager import ToolManager
+from eyetools.core.tool_manager import ToolManager
 
 
 def get_test_app():

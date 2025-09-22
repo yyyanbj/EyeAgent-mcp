@@ -19,7 +19,6 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Any, Dict, List
-import runpy
 import yaml
 from .errors import ConfigError
 
@@ -35,18 +34,6 @@ def _read_yaml(path: Path) -> Dict[str, Any]:
     with path.open("r", encoding="utf-8") as f:
         return yaml.safe_load(f) or {}
 
-
-def _read_py(path: Path) -> Dict[str, Any]:
-    ns = runpy.run_path(str(path))
-    if "get_config" in ns:
-        cfg = ns["get_config"]()
-    elif "CONFIGS" in ns:
-        cfg = {"tools": ns["CONFIGS"]}
-    else:
-        raise ConfigError("Python config must expose get_config() or CONFIGS")
-    if not isinstance(cfg, dict):
-        raise ConfigError("Python config entry must return dict")
-    return cfg
 
 
 def _detect_mode(data: Dict[str, Any]) -> str:
@@ -160,7 +147,9 @@ def _expand_tools_list(data: Dict[str, Any]) -> List[Dict[str, Any]]:
 
 
 def parse_config_file(path: Path) -> List[Dict[str, Any]]:
-    data = _read_yaml(path) if path.suffix in (".yml", ".yaml") else _read_py(path)
+    if path.suffix not in (".yml", ".yaml"):
+        raise ConfigError("Only YAML config files are supported (config.yml/config.yaml)")
+    data = _read_yaml(path)
     mode = _detect_mode(data)
     if mode == "single":
         items = [data]
@@ -178,7 +167,7 @@ def parse_config_file(path: Path) -> List[Dict[str, Any]]:
 
 def load_configs_in_dir(dir_path: Path) -> List[Dict[str, Any]]:
     configs: List[Dict[str, Any]] = []
-    for fname in ("config.yaml", "config.yml", "config.py"):
+    for fname in ("config.yaml", "config.yml"):
         p = dir_path / fname
         if p.exists():
             configs.extend(parse_config_file(p))

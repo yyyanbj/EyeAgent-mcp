@@ -37,8 +37,11 @@ class FollowUpAgent(DiagnosticBaseAgent):
                 tool_id = step.get("tool_id")
                 if tool_id not in self.allowed_tool_ids:
                     continue
+                # Always prefer actual image path from context; ignore any placeholder in step arguments
                 img_path = images[0].get("path") if images else None
-                args = step.get("arguments") or ({"image_path": img_path} if img_path else {})
+                args = {}
+                if img_path:
+                    args["image_path"] = img_path
                 tc = await self._call_tool(client, tool_id, args)
                 tc["reasoning"] = step.get("reasoning")
                 tool_calls.append(tc)

@@ -92,7 +92,18 @@ def _append_messages_from_result(state: WorkflowState, result: Dict[str, Any]) -
             (state.get("trace") or TraceLogger()).append_conversation_message(case_id, msg)  # type: ignore[arg-type]
         except Exception:
             pass
-        logger.info(f"[agent case={case_id}] {title} tool_call id={tool_id} status={status}")
+        # Also log a compact one-line summary including args and output for quick debugging
+        try:
+            args_summary = _summarize_json(args, max_len=200)
+        except Exception:
+            args_summary = "?"
+        try:
+            out_summary = _summarize_json(out, max_len=400)
+        except Exception:
+            out_summary = "?"
+        logger.info(
+            f"[agent case={case_id}] {title} tool_call id={tool_id} status={status} args={args_summary} output={out_summary}"
+        )
     outputs = result.get("outputs")
     if outputs:
         msg = {"role": "assistant", "content": f"{title} outputs: {_summarize_json(outputs)}"}
@@ -474,8 +485,9 @@ def compile_graph():
                     elif role == "orchestrator":
                         state["pipeline"] = (res.get("outputs") or {}).get("planned_pipeline", [])
                 return state
-    logger.info("[workflow] execution_mode=profile, source=pipelines.yml")
-    return _ProfileGraph()
+
+        logger.info("[workflow] execution_mode=profile, source=pipelines.yml")
+        return _ProfileGraph()
     if use_langgraph:
         g = StateGraph(WorkflowState)  # type: ignore[call-arg]
         g.add_node("orchestrator", node_orchestrator)

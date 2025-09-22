@@ -9,7 +9,8 @@ from .base import (
     ToolBase,
 )
 
-from .registry import ToolRegistry
+# Prefer core.* modules; keep legacy import paths as shims
+from .core.registry import ToolRegistry  # noqa: F401
 
 from .utils import (
     PathHandler,

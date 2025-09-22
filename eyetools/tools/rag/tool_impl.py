@@ -87,6 +87,7 @@ class RAGQueryTool:
             "fields": {
                 "items": "Top-k snippets with source and score",
                 "source": "rag",
+                "inference_time": "seconds",
             },
         }
 
@@ -139,6 +140,7 @@ class RAGQueryTool:
         self._telemetry = {"chunks": len(self._index), "build_sec": round(time.time() - start, 3)}
 
     def predict(self, request: Dict[str, Any]) -> Dict[str, Any]:
+        start = time.time()
         if (self.meta.get("model", {}) or {}).get("lazy", True) and not self._prepared:
             self.ensure_model_loaded()
         inputs = request.get("inputs") if isinstance(request, dict) else None
@@ -146,7 +148,7 @@ class RAGQueryTool:
             inputs = {}
         query = str(inputs.get("query") or "").strip()
         if not query:
-            return {"items": [], "source": "rag", "warning": "empty query"}
+            return {"items": [], "source": "rag", "warning": "empty query", "inference_time": round(time.time() - start, 4)}
         top_k = int(inputs.get("top_k") or self.default_top_k)
         q_toks = _tokenize(query)
         scored: List[Tuple[float, int]] = []  # (score, idx)
@@ -159,6 +161,6 @@ class RAGQueryTool:
         for s, i in scored[:top_k]:
             src, chunk, _ = self._index[i]
             items.append({"title": Path(src).name, "text": chunk[:1200], "source": src, "score": round(float(s), 4)})
-        return {"items": items, "source": "rag"}
+        return {"items": items, "source": "rag", "inference_time": round(time.time() - start, 4)}
 
 __all__ = ["RAGQueryTool"]

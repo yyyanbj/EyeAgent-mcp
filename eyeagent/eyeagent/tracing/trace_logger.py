@@ -110,7 +110,22 @@ class TraceLogger:
         with self._lock:
             path = self._trace_path(case_id)
             if not os.path.exists(path):
-                raise FileNotFoundError(f"trace.json not found for case {case_id}")
+                # Auto-create a minimal case to avoid hard failure; ensure directory exists
+                try:
+                    os.makedirs(os.path.dirname(path), exist_ok=True)
+                    doc = {
+                        "case_id": case_id,
+                        "created_at": ISO(),
+                        "updated_at": ISO(),
+                        "patient": {},
+                        "images": [],
+                        "events": [],
+                        "next_seq": 1,
+                        "note": "Auto-created by TraceLogger.append_event because trace.json was missing",
+                    }
+                    self._atomic_write_json(path, doc)
+                except Exception:
+                    raise FileNotFoundError(f"trace.json not found and could not be created for case {case_id}")
             # Try load existing; if corrupted, attempt recovery from backup or reconstruct minimal doc
             try:
                 with open(path, 'r', encoding='utf-8') as f:

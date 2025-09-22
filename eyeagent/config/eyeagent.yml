@@ -43,6 +43,7 @@ tools_filter:
   ImageAnalysisAgent:
     include:
       - "classification:cfp_quality"
+      - "classification:cfp_age"
       - "segmentation:cfp_.*"
       - "segmentation:oct_.*"
       - "segmentation:ffa_.*"

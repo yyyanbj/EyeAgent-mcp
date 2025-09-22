@@ -10,7 +10,7 @@ from __future__ import annotations
 from fastapi import FastAPI, HTTPException, Query
 from pydantic import BaseModel
 from typing import List, Optional, Any, Dict, Callable
-import os, json, logging
+import os, json, logging, time, datetime
 from pathlib import Path
 
 from .core.registry import ToolRegistry
@@ -25,155 +25,19 @@ try:  # pragma: no cover - import side effect
 except Exception:  # noqa
     FastMCP = None  # type: ignore
 
+"""Utilities"""
 
-class PredictRequest(BaseModel):
-    tool_id: str
-    request: Dict[str, Any] = {}
-    role: Optional[str] = None
-
-
-# ------------------------
-# Output standardization
-# ------------------------
 def _env_int(name: str, default: int) -> int:
     try:
         return int(os.getenv(name, str(default)))
     except Exception:
         return default
+        
 
-
-_STD_MAX_CLASSES = _env_int("EYETOOLS_STD_MAX_CLASSES", 8)
-
-
-_DISEASE_NAME_MAP = {
-    # minimal, extend as needed
-    "amd": {"full": "Age-related macular degeneration", "abbr": "AMD"},
-    "dr": {"full": "Diabetic retinopathy", "abbr": "DR"},
-    "dme": {"full": "Diabetic macular edema", "abbr": "DME"},
-    "rvo": {"full": "Retinal vein occlusion", "abbr": "RVO"},
-    "cnv": {"full": "Choroidal neovascularization", "abbr": "CNV"},
-    "mh": {"full": "Macular hole", "abbr": "MH"},
-    "rd": {"full": "Retinal detachment", "abbr": "RD"},
-    "drusen": {"full": "Drusen", "abbr": "Drusen"},
-    "scar": {"full": "Scar", "abbr": "Scar"},
-    "edema": {"full": "Edema", "abbr": "Edema"},
-    "glaucoma": {"full": "Glaucoma", "abbr": "Glaucoma"},
-}
-
-
-def _humanize(s: str) -> str:
-    try:
-        base = s.replace("_", " ").replace("-", " ").strip()
-        return base[:1].upper() + base[1:]
-    except Exception:
-        return s
-
-
-def _variant_from_tool_id(tool_id: str) -> str | None:
-    # disease-specific tools use id like 'disease-specific:AMD_finetune'
-    if ":" in tool_id:
-        prefix, suffix = tool_id.split(":", 1)
-        if prefix.startswith("disease"):
-            return suffix
-    return None
-
-
-def _disease_names_for_variant(variant: str | None) -> Dict[str, str] | None:
-    if not variant:
-        return None
-    base = variant
-    for suf in ("_finetune", "_lp"):
-        if base.endswith(suf):
-            base = base[: -len(suf)]
-            break
-    key = base.lower()
-    if key in _DISEASE_NAME_MAP:
-        return _DISEASE_NAME_MAP[key]
-    # fallback: use humanized base as full and uppercase letters as abbr
-    abbr = "".join([c for c in base if c.isupper()]) or base[:4].upper()
-    return {"full": _humanize(base), "abbr": abbr}
-
-
-def _top_k_probabilities(pmap: Dict[str, Any], k: int) -> Dict[str, float]:
-    try:
-        items = [(k2, float(v2)) for k2, v2 in pmap.items()]
-        items.sort(key=lambda x: x[1], reverse=True)
-        trimmed = items[: max(1, k)]
-        return {k3: float(round(v3, 6)) for k3, v3 in trimmed}
-    except Exception:
-        return pmap  # best effort
-
-
-def _standardize_output(tool_id: str, data: Any) -> Any:
-    """Best-effort enrichment for tool outputs.
-
-    Adds:
-      - tool_id
-      - kind: classification | disease_specific | segmentation (when detectable)
-      - probabilities: dict (from all_probabilities or existing)
-      - predicted_label / predicted_prob (when derivable)
-      - disease_names: {full, abbr} for disease-specific variants
-      - total_regions for segmentation counts
-    Non-dict outputs are returned unchanged.
-    """
-    if not isinstance(data, dict):
-        return data
-    out = dict(data)
-    out.setdefault("tool_id", tool_id)
-    # kind inference
-    kind = out.get("kind")
-    if not kind:
-        if tool_id.startswith("segmentation:") or any(k in out for k in ("counts", "areas")):
-            kind = "segmentation"
-        elif tool_id.startswith("classification:"):
-            kind = "classification"
-        elif tool_id.startswith("disease-specific:"):
-            kind = "disease_specific"
-        out["kind"] = kind
-    # classification standardization (including laterality/modality)
-    if kind == "classification":
-        preds = out.get("predictions")
-        probs = out.get("probabilities")
-        if isinstance(preds, list) and preds:
-            out.setdefault("predicted_label", str(preds[0]))
-            if isinstance(probs, dict):
-                # trim for safety
-                out["probabilities"] = _top_k_probabilities(probs, _STD_MAX_CLASSES)
-                pl = out.get("predicted_label")
-                if isinstance(pl, str) and pl in out["probabilities"]:
-                    out["predicted_prob"] = float(out["probabilities"][pl])
-        # special numeric regression tasks (e.g., cfp_age)
-        if "prediction" in out and not out.get("predicted_label"):
-            try:
-                out["predicted_label"] = str(out["prediction"])  # textual form
-            except Exception:
-                pass
-    # disease-specific
-    if kind == "disease_specific":
-        # align probabilities key
-        if "probabilities" not in out and isinstance(out.get("all_probabilities"), dict):
-            out["probabilities"] = _top_k_probabilities(out.get("all_probabilities"), _STD_MAX_CLASSES)
-        elif isinstance(out.get("probabilities"), dict):
-            out["probabilities"] = _top_k_probabilities(out.get("probabilities"), _STD_MAX_CLASSES)
-        # compute predicted_label/predicted_prob via max prob
-        pmap = out.get("probabilities")
-        if isinstance(pmap, dict) and pmap:
-            best = max(pmap.items(), key=lambda x: float(x[1]))
-            out.setdefault("predicted_label", str(best[0]))
-            out.setdefault("predicted_prob", float(best[1]))
-        # attach disease full/abbr derived from variant
-        names = _disease_names_for_variant(_variant_from_tool_id(tool_id))
-        if names:
-            out.setdefault("disease_names", names)
-    # segmentation
-    if kind == "segmentation":
-        counts = out.get("counts")
-        if isinstance(counts, dict):
-            try:
-                out.setdefault("total_regions", int(sum(int(v) for v in counts.values())))
-            except Exception:
-                pass
-    return out
+class PredictRequest(BaseModel):
+    tool_id: str
+    request: Dict[str, Any] = {}
+    role: Optional[str] = None
 
 
 def _configure_external_logging():
@@ -439,18 +303,18 @@ def create_app(
                 sig_params = ", ".join(f"{s}: Any = None" for s in san_list)
                 body = [
                     "    try:",
-                    "        _locals = {k: v for k, v in locals().items() if k not in {'tid','tm','_map','_std'}}",
+                    "        _locals = {k: v for k, v in locals().items() if k not in {'tid','tm','_map'}}",
                     "        inputs = {}",
                     "        for _san,_orig in _map.items():",
                     "            val = _locals.get(_san)",
                     "            if val is not None: inputs[_orig] = val",
                     "        _raw = tm.predict(tid, {'inputs': inputs} if inputs else {})",
-                    "        return _std(tid, _raw)",
+                    "        return {'output': _raw, '__meta__': {'tool_id': tid, 'inputs': inputs, 'ts': __import__('time').time()}}",
                     "    except Exception as e:",
-                    "        return {'error': str(e)}",
+                    "        return {'error': str(e), '__meta__': {'tool_id': tid, 'inputs': inputs if 'inputs' in locals() else {}, 'ts': __import__('time').time()}}",
                 ]
                 src = f"async def _f({sig_params}):\n" + "\n".join(body)
-                glb = {"tm": tm, "tid": tool_id, "Any": Any, "_map": mapping, "_std": _standardize_output}
+                glb = {"tm": tm, "tid": tool_id, "Any": Any, "_map": mapping}
                 loc: Dict[str, Any] = {}
                 exec(src, glb, loc)  # noqa
                 fn = loc["_f"]
@@ -461,18 +325,18 @@ def create_app(
             async def func_kwargs(**kwargs):  # type: ignore
                 try:
                     _raw = tm.predict(tool_id, {"inputs": kwargs} if kwargs else {})
-                    return _standardize_output(tool_id, _raw)
+                    return {"output": _raw, "__meta__": {"tool_id": tool_id, "inputs": kwargs or {}, "ts": time.time()}}
                 except Exception as e:  # noqa
-                    return {"error": str(e)}
+                    return {"error": str(e), "__meta__": {"tool_id": tool_id, "inputs": kwargs or {}, "ts": time.time()}}
             func_kwargs.__name__ = f"tool_{tool_id.replace(':','_')}"
             func_kwargs.__doc__ = f"MCP wrapper for eyetools tool '{tool_id}' (kwargs)"
 
             async def func_payload(payload: Dict[str, Any] | None = None):  # type: ignore
                 try:
                     _raw = tm.predict(tool_id, {"inputs": (payload or {})} if payload else {})
-                    return _standardize_output(tool_id, _raw)
+                    return {"output": _raw, "__meta__": {"tool_id": tool_id, "inputs": (payload or {}), "ts": time.time()}}
                 except Exception as e:  # noqa
-                    return {"error": str(e)}
+                    return {"error": str(e), "__meta__": {"tool_id": tool_id, "inputs": (payload or {}), "ts": time.time()}}
             func_payload.__name__ = f"tool_{tool_id.replace(':','_')}_payload"
             func_payload.__doc__ = f"MCP wrapper for eyetools tool '{tool_id}' (payload)"
 
@@ -581,13 +445,6 @@ def create_app(
                 "io": m.io,
                 "tags": m.tags,
             }
-            # Ask tool implementation for optional output details (decoupled from server)
-            try:
-                details = tm.get_output_details(m.id)
-                if details:
-                    out["output_details"] = details
-            except Exception:
-                pass
             tools_out.append(out)
         return {"tools": tools_out}
 
@@ -604,11 +461,12 @@ def create_app(
             raise HTTPException(status_code=404, detail="Tool not found")
         except Exception as e:  # noqa
             raise HTTPException(status_code=500, detail=str(e))
-        try:
-            std = _standardize_output(req.tool_id, raw)
-        except Exception:
-            std = raw
-        return {"tool_id": req.tool_id, "data": std}
+        meta = {
+            "tool_id": req.tool_id,
+            "inputs": (req.request.get("inputs") if isinstance(req.request, dict) else None) or req.request,
+            "ts": time.time(),
+        }
+        return {"output": raw, "__meta__": meta}
 
     @app.get("/metrics")
     def metrics(tool_id: Optional[str] = Query(None)):

@@ -93,15 +93,38 @@ class BaseAgent:
             "version": meta.get("version") if meta else None,
             "arguments": arguments,
         }
+        # Preflight: if a local image_path is required but doesn't exist (and not in DRY-RUN), fail fast
+        try:
+            if not self._dry_run():
+                img_path = (arguments or {}).get("image_path")
+                if img_path and isinstance(img_path, str) and not os.path.exists(img_path):
+                    err = f"File not found: {img_path}"
+                    event = {**event_base, "status": "failed", "error": err}
+                    self.trace_logger.append_event(self.case_id, event)
+                    return {"tool_id": tool_id, "arguments": arguments, "output": None, "status": "failed", "error": err, "version": meta.get("version") if meta else None}
+        except Exception:
+            # If preflight itself errors, continue to normal flow
+            pass
         # DRY-RUN: return mock outputs without calling MCP
         if self._dry_run():
             role = (meta or {}).get("role")
             mock: Dict[str, Any] = {"mock": True}
             try:
                 if role == "specialist":
-                    mock.update({"disease": meta.get("disease") or "unknown", "probability": 0.0, "predicted": False, "all_probabilities": {"negative": 1.0}, "grade": "ungraded", "confidence": 0.0})
+                    mock.update({
+                        "disease": meta.get("disease") or "unknown",
+                        "probability": 0.0,
+                        "predicted": False,
+                        "all_probabilities": {"negative": 1.0},
+                        "grade": "ungraded",
+                        "confidence": 0.0
+                    })
                 elif isinstance(tool_id, str) and tool_id.startswith("classification:cfp_quality"):
-                    mock.update({"prediction": "unknown"})
+                    mock.update({"prediction": "good", "probabilities": {"good": 0.8, "poor": 0.2}})
+                elif isinstance(tool_id, str) and tool_id.startswith("classification:cfp_age"):
+                    mock.update({"task": "cfp_age", "prediction": 62, "unit": "years"})
+                elif isinstance(tool_id, str) and tool_id.startswith("classification:multidis"):
+                    mock.update({"probabilities": {"DR": 0.12, "AMD": 0.08, "Glaucoma": 0.05}})
                 elif isinstance(tool_id, str) and tool_id.startswith("segmentation:"):
                     mock.update({"counts": {}})
             except Exception:
@@ -109,7 +132,7 @@ class BaseAgent:
             std = self._standardize_output(tool_id, mock, meta)
             event = {**event_base, "status": "success", "output": std, "dry_run": True}
             self.trace_logger.append_event(self.case_id, event)
-            return {"tool_id": tool_id, "output": std, "status": "success", "version": meta.get("version") if meta else None}
+            return {"tool_id": tool_id, "arguments": arguments, "output": std, "status": "success", "version": meta.get("version") if meta else None}
         try:
             if not meta:
                 raise ValueError(f"Unknown tool_id={tool_id}")
@@ -117,14 +140,41 @@ class BaseAgent:
             with tool_timer(tool_id):
                 raw = await client.call_tool(name=meta["mcp_name"], arguments=arguments)
             output = self._normalize_tool_result(raw)
-            std = self._standardize_output(tool_id, output, meta)
-            event = {**event_base, "status": "success", "output": std}
+            # Unwrap MCP envelope {"output": <tool_output>, "__meta__": {...}} if present
+            mcp_meta = None
+            payload = output
+            if isinstance(output, dict) and "output" in output and "__meta__" in output:
+                try:
+                    mcp_meta = dict(output.get("__meta__") or {})
+                except Exception:
+                    mcp_meta = output.get("__meta__")
+                payload = output.get("output")
+            std = self._standardize_output(tool_id, payload, meta)
+            # If the tool returns an error payload instead of raising, mark as failed
+            status = "success"
+            err_msg = None
+            if isinstance(payload, dict) and "error" in payload:
+                status = "failed"
+                try:
+                    err_msg = str(payload.get("error"))
+                except Exception:
+                    err_msg = "tool returned error"
+            event = {**event_base, "status": status, "output": std}
+            if err_msg:
+                event["error"] = err_msg
+            if mcp_meta is not None:
+                event["mcp_meta"] = mcp_meta
             self.trace_logger.append_event(self.case_id, event)
-            return {"tool_id": tool_id, "output": std, "status": "success", "version": meta.get("version")}
+            result = {"tool_id": tool_id, "arguments": arguments, "output": std, "status": status, "version": meta.get("version")}
+            if err_msg:
+                result["error"] = err_msg
+            if mcp_meta is not None:
+                result["mcp_meta"] = mcp_meta
+            return result
         except Exception as e:
             event = {**event_base, "status": "failed", "error": str(e)}
             self.trace_logger.append_event(self.case_id, event)
-            return {"tool_id": tool_id, "output": None, "status": "failed", "error": str(e), "version": meta.get("version") if meta else None}
+            return {"tool_id": tool_id, "arguments": arguments, "output": None, "status": "failed", "error": str(e), "version": meta.get("version") if meta else None}
 
     async def a_run(self, context: Dict[str, Any]) -> Dict[str, Any]:
         """Override in subclasses to implement planning + tool usage + reasoning."""
@@ -144,7 +194,8 @@ class BaseAgent:
         for img in img_list:
             args = dict(arguments or {})
             if isinstance(img, dict) and img.get("path"):
-                args.setdefault("image_path", img.get("path"))
+                # Always prefer the real image path from context over any placeholder from planner
+                args["image_path"] = img.get("path")
             tc = await self._call_tool(client, tool_id, args)
             if isinstance(img, dict):
                 tc["image_id"] = img.get("image_id") or img.get("path")

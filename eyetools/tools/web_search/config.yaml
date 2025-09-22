@@ -14,6 +14,8 @@ shared:
     output_schema:
       items: array
       source: string
+      inference_time: number
+      warning: string
   model_defaults:
     lazy: true
 variants:

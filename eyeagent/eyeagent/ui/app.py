@@ -7,6 +7,7 @@ from typing import List, Dict, Any, Tuple, Optional, AsyncGenerator
 import html
 
 import gradio as gr
+from loguru import logger
 
 from eyeagent.tracing.trace_logger import TraceLogger
 from eyeagent.config.prompts import PromptsConfig
@@ -93,15 +94,43 @@ def _resolve_media_path(p: str) -> Optional[str]:
     return None
 
 
-def _format_agent_bubble(agent: str, role: str, reasoning: Optional[str], outputs_preview: Optional[str] = None, seq: Optional[int] = None) -> str:
+def _format_agent_bubble(agent: str, role: str, reasoning: Optional[str], outputs_preview: Optional[str] = None, seq: Optional[int] = None, tool_calls: Optional[List[Dict[str, Any]]] = None) -> str:
     title = f"{html.escape(agent)} ({html.escape(role)})" if role else html.escape(agent)
     if seq is not None:
         title = f"#{seq} • " + title
     body = html.escape(reasoning) if reasoning else ""
-    details = (
+    details_sections: List[str] = []
+    if outputs_preview:
+        details_sections.append(
         f"<details style='margin-top:6px;'><summary style='cursor:pointer;'>Agent outputs</summary>"
         f"<div style='margin-top:6px'>{outputs_preview}</div></details>"
-    ) if outputs_preview else ""
+        )
+    # Tool calls reasoning section (if present)
+    if tool_calls:
+        items: List[str] = []
+        for tc in tool_calls[:8]:  # limit to 8 for brevity
+            tid = html.escape(str(tc.get('tool_id')))
+            st = html.escape(str(tc.get('status')))
+            rs = tc.get('reasoning')
+            rs_html = html.escape(str(rs)) if isinstance(rs, str) and rs else None
+            pred = None
+            out = tc.get('output')
+            if isinstance(out, dict):
+                pred = out.get('predicted_label') or out.get('label') or out.get('prediction')
+            pred_html = f" <span style='color:#37474f'>(pred: <code>{html.escape(str(pred))}</code>)</span>" if pred is not None else ""
+            err = tc.get('error')
+            err_html = f" <span style='color:#b71c1c'>(error: {html.escape(str(err))})</span>" if err else ""
+            line = f"<li><strong>{tid}</strong> → <span style='color:{'#c62828' if (st.lower()!='success') else '#1b5e20'}'>{st}</span>{pred_html}{err_html}"
+            if rs_html:
+                line += f"<div style='margin-top:4px;color:#455a64;font-size:0.9em'>{rs_html}</div>"
+            line += "</li>"
+            items.append(line)
+        if items:
+            details_sections.append(
+                f"<details style='margin-top:6px;'><summary style='cursor:pointer;'>Tool calls</summary>"
+                f"<div style='margin-top:6px'><ul style='margin:0 0 0 16px;padding:0'>{''.join(items)}</ul></div></details>"
+            )
+    details = "".join(details_sections)
     box = (
         "<div style='background:#ffffff; border:1px solid #e0e0e0; border-left:4px solid #7cb342; padding:10px;"
         " margin:6px 0; border-radius:6px;'>"
@@ -113,27 +142,35 @@ def _format_agent_bubble(agent: str, role: str, reasoning: Optional[str], output
     return _wrap_with_avatar(agent, role, box)
 
 
-def _format_tool_bubble(tool_id: str, status: str, arguments: Dict[str, Any], output_preview: Optional[str] = None, caller_agent: Optional[str] = None, caller_role: Optional[str] = None, images_html: Optional[str] = None, seq: Optional[int] = None) -> str:
+def _format_tool_bubble(tool_id: str, status: str, arguments: Dict[str, Any], output_preview: Optional[str] = None, caller_agent: Optional[str] = None, caller_role: Optional[str] = None, images_html: Optional[str] = None, seq: Optional[int] = None, error_text: Optional[str] = None) -> str:
     arg_text = html.escape(str(arguments)) if arguments else "{}"
     header = f"🔧 {html.escape(tool_id)}"
     if seq is not None:
         header = f"#{seq} • " + header
     sub = f"<div style='color:#455a64; font-size:0.9em;'>by {html.escape(caller_agent or '')} {f'({html.escape(caller_role or '')})' if caller_role else ''}</div>"
+    status_lower = (status or "").lower()
+    failed = status_lower != "success"
+    status_color = "#c62828" if failed else "#1565c0"
     status_txt = f"Status: {html.escape(status)}"
     # Emphasize outputs: show summary immediately, collapse arguments
     outputs_html = (
         f"<div style='margin-top:6px;color:#37474f;font-size:0.9em'>{output_preview}</div>"
     ) if output_preview else ""
+    error_html = (
+        f"<div style='margin-top:8px; color:#b71c1c; background:#ffebee; border:1px solid #ef9a9a; padding:8px; border-radius:4px;'><strong>Error:</strong> {html.escape(error_text)}</div>"
+    ) if (error_text and failed) else ""
     args_html = (
         f"<details style='margin-top:6px;'><summary style='cursor:pointer;font-size:0.9em'>Call arguments</summary>"
         f"<div style='margin-top:6px;color:#37474f;font-size:0.9em'><code style='background:#f5f5f5;padding:2px 4px;border-radius:3px;'>{arg_text}</code></div></details>"
     )
+    left_border = "#e53935" if failed else "#1e88e5"
     box = (
-        "<div style='background:#ffffff; border:1px solid #e0e0e0; border-left:4px solid #1e88e5; padding:10px;"
+        f"<div style='background:#ffffff; border:1px solid #e0e0e0; border-left:4px solid {left_border}; padding:10px;"
         " margin:6px 0; border-radius:6px;'>"
         f"<div style='font-weight:600;color:#0d47a1; margin-bottom:2px;font-size:0.95em'>{header}</div>"
         f"{sub}"
-        f"<div style='color:#1565c0; margin-top:4px;font-size:0.9em'>{status_txt}</div>"
+        f"<div style='color:{status_color}; margin-top:4px;font-size:0.9em'>{status_txt}</div>"
+        f"{error_html}"
         f"{outputs_html}"
         f"{args_html}"
         f"{images_html or ''}"
@@ -170,10 +207,25 @@ def _tool_output_images(output: Dict[str, Any]) -> List[str]:
     return paths
 
 
-def _summarize_tool_output(output: Any, max_items: int = 5) -> Optional[str]:
+def _summarize_tool_output(output: Any, max_items: int = 5, mcp_meta: Optional[Dict[str, Any]] = None) -> Optional[str]:
     if not isinstance(output, dict):
         return None
     parts: List[str] = []
+    # Optional MCP meta line
+    if mcp_meta and isinstance(mcp_meta, dict):
+        try:
+            ts = mcp_meta.get("ts")
+            from datetime import datetime
+            ts_str = datetime.fromtimestamp(float(ts)).strftime("%Y-%m-%d %H:%M:%S") if ts is not None else None
+        except Exception:
+            ts_str = None
+        meta_bits = []
+        if isinstance(mcp_meta.get("tool_id"), str):
+            meta_bits.append(f"tool_id: <code>{html.escape(str(mcp_meta.get('tool_id')))}</code>")
+        if ts_str:
+            meta_bits.append(f"time: <code>{html.escape(ts_str)}</code>")
+        if meta_bits:
+            parts.append(f"<div style='color:#6b7280'><small>{' | '.join(meta_bits)}</small></div>")
     task = output.get("task")
     if isinstance(task, str):
         parts.append(f"<div><strong>Task:</strong> {html.escape(task)}</div>")
@@ -182,11 +234,17 @@ def _summarize_tool_output(output: Any, max_items: int = 5) -> Optional[str]:
         parts.append(f"<div><strong>Inference time:</strong> {html.escape(str(output.get('inference_time')))}s</div>")
     if isinstance(output.get("message"), str):
         parts.append(f"<div><em>{html.escape(str(output.get('message')))}</em></div>")
+    # Explicit error message from tool payload
+    if isinstance(output.get("error"), str) and output.get("error"):
+        parts.append(f"<div style='color:#b71c1c'><strong>Error:</strong> {html.escape(str(output.get('error')))}</div>")
     # classification style (general)
     preds = output.get("predictions")
     probs = output.get("probabilities")
     pred_label = output.get("predicted_label")
     pred_prob = output.get("predicted_prob")
+    # explicit single-label classification (e.g., modality/laterality)
+    if isinstance(output.get("label"), str) and not preds and not probs:
+        parts.append(f"<div><strong>Label:</strong> {html.escape(str(output.get('label')))}</div>")
     # If both present, show aligned top predictions
     if isinstance(preds, list) and probs and isinstance(probs, dict):
         items = []
@@ -405,17 +463,26 @@ async def _run_and_stream(patient: Dict[str, Any], image_paths: List[str], progr
                         status = ev.get("status")
                         args = ev.get("arguments", {})
                         output = ev.get("output")
+                        mcp_meta = ev.get("mcp_meta")
+                        # Prefer explicit error from event; fallback to output.error
+                        err = ev.get("error")
+                        if not err and isinstance(output, dict):
+                            err = output.get("error")
                         imgs = _tool_output_images(output or {})
                         gallery_html = _embed_images_html(imgs) if imgs else None
-                        bubble = _format_tool_bubble(tool or "tool", status or "", args, _summarize_tool_output(output), ev.get("agent"), ev.get("role"), images_html=gallery_html, seq=ev.get("seq"))
+                        bubble = _format_tool_bubble(tool or "tool", status or "", args, _summarize_tool_output(output, mcp_meta=mcp_meta), ev.get("agent"), ev.get("role"), images_html=gallery_html, seq=ev.get("seq"), error_text=(str(err) if err else None))
                         msgs.append({"role": "assistant", "content": bubble})
-                        print(f"[tool_call] {ev.get('agent')} ({ev.get('role')}): {tool} -> {status}")
+                        if (status or '').lower() == 'success':
+                            logger.info(f"[tool_call] {ev.get('agent')} ({ev.get('role')}): {tool} -> {status}")
+                        else:
+                            logger.error(f"[tool_call] {ev.get('agent')} ({ev.get('role')}): {tool} -> {status} error={err} args={args}")
                     elif et == "agent_step":
                         agent = ev.get("agent") or "Agent"
                         role = ev.get("role") or ""
                         reasoning = ev.get("reasoning")
                         outputs_prev = _summarize_agent_outputs(ev.get("outputs"))
-                        msgs.append({"role": "assistant", "content": _format_agent_bubble(agent, role, reasoning, outputs_prev, seq=ev.get("seq"))})
+                        tool_calls = ev.get("tool_calls") if isinstance(ev.get("tool_calls"), list) else None
+                        msgs.append({"role": "assistant", "content": _format_agent_bubble(agent, role, reasoning, outputs_prev, seq=ev.get("seq"), tool_calls=tool_calls)})
                         print(f"[agent_step] {agent} ({role})")
                     elif et == "error":
                         msgs.append({"role": "assistant", "content": f"[error] {ev.get('message', 'Error')}"})
@@ -465,16 +532,21 @@ def _events_to_messages(events: List[Dict[str, Any]], case_id: Optional[str] = N
             status = ev.get("status")
             args = ev.get("arguments", {})
             output = ev.get("output")
+            mcp_meta = ev.get("mcp_meta")
             imgs = _tool_output_images(output or {})
             gallery_html = _embed_images_html(imgs) if imgs else None
-            bubble = _format_tool_bubble(tool or 'tool', status or '', args, _summarize_tool_output(output), ev.get("agent"), ev.get("role"), images_html=gallery_html)
+            err = ev.get("error")
+            if not err and isinstance(output, dict):
+                err = output.get("error")
+            bubble = _format_tool_bubble(tool or 'tool', status or '', args, _summarize_tool_output(output, mcp_meta=mcp_meta), ev.get("agent"), ev.get("role"), images_html=gallery_html, error_text=(str(err) if err else None))
             msgs.append({"role": "assistant", "content": bubble})
         elif et == "agent_step":
             agent = ev.get("agent") or "Agent"
             role = ev.get("role") or ""
             reasoning = ev.get("reasoning")
             outputs_prev = _summarize_agent_outputs(ev.get("outputs"))
-            msgs.append({"role": "assistant", "content": _format_agent_bubble(agent, role, reasoning, outputs_prev)})
+            tool_calls = ev.get("tool_calls") if isinstance(ev.get("tool_calls"), list) else None
+            msgs.append({"role": "assistant", "content": _format_agent_bubble(agent, role, reasoning, outputs_prev, tool_calls=tool_calls)})
         elif et == "error":
             msgs.append({"role": "assistant", "content": f"[error] {ev.get('message', 'Error')}"})
     return msgs

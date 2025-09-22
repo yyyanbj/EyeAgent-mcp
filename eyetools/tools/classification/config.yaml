@@ -12,7 +12,12 @@ shared:
     input_schema:
       image_path: path
     output_schema:
-      predictions: list
+      prediction: string|number  # top-1 label or numeric (e.g., age)
+      label: string              # alias of prediction for label-type tasks
+      predictions: array         # optional top-N labels
+      probabilities: object      # map of label -> probability
+      inference_time: number     # seconds
+      unit: string               # optional (e.g., 'years' for cfp_age)
   model_defaults:
     precision: auto
     lazy: true

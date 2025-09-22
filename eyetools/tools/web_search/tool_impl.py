@@ -38,7 +38,7 @@ class WebSearchTool:
         prov = (params or {}).get("provider", "pubmed")
         return {
             "schema": (meta.get("io") or {}).get("output_schema", {}),
-            "fields": {"items": f"Top results from {prov}", "source": prov},
+            "fields": {"items": f"Top results from {prov}", "source": prov, "inference_time": "seconds"},
         }
 
     def prepare(self):
@@ -49,6 +49,7 @@ class WebSearchTool:
         return
 
     def _search_pubmed(self, query: str, top_k: int) -> Dict[str, Any]:
+        start = time.time()
         # Use Entrez e-utilities: esearch then esummary. No API key required for small requests.
         base = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils"
         q = urlencode({"db": "pubmed", "term": query, "retmax": str(max(1, min(50, top_k)))})
@@ -79,13 +80,14 @@ class WebSearchTool:
                             items.append({"id": pid, "title": title, "abstract": None, "url": url, "year": year})
                 except Exception:
                     pass
-        return {"items": items[:top_k], "source": "pubmed"}
+        return {"items": items[:top_k], "source": "pubmed", "inference_time": round(time.time() - start, 4)}
 
     def _search_tavily(self, query: str, top_k: int) -> Dict[str, Any]:
+        start = time.time()
         # Tavily API requires api_key; if missing or network blocked, return graceful empty results.
         api_key = os.getenv("TAVILY_API_KEY")
         if not api_key:
-            return {"items": [], "source": "tavily", "warning": "TAVILY_API_KEY not set"}
+            return {"items": [], "source": "tavily", "warning": "TAVILY_API_KEY not set", "inference_time": round(time.time() - start, 4)}
         params = {"api_key": api_key, "query": query, "max_results": max(1, min(10, top_k))}
         url = "https://api.tavily.com/search?" + urlencode(params)
         js = _http_get_json(url)
@@ -98,7 +100,7 @@ class WebSearchTool:
                         "url": r.get("url"),
                         "content": r.get("content"),
                     })
-        return {"items": items[:top_k], "source": "tavily"}
+        return {"items": items[:top_k], "source": "tavily", "inference_time": round(time.time() - start, 4)}
 
     def predict(self, request: Dict[str, Any]) -> Dict[str, Any]:
         inputs = request.get("inputs") if isinstance(request, dict) else None
@@ -106,7 +108,7 @@ class WebSearchTool:
             inputs = {}
         query = str(inputs.get("query") or "").strip()
         if not query:
-            return {"items": [], "source": self.provider, "warning": "empty query"}
+            return {"items": [], "source": self.provider, "warning": "empty query", "inference_time": 0.0}
         top_k = int(inputs.get("top_k") or self.default_top_k)
         if self.provider == "tavily":
             return self._search_tavily(query, top_k)
