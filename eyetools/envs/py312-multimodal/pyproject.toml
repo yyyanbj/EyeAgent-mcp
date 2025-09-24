@@ -1,0 +1,19 @@
+[project]
+name = "eyetools-py312-multimodal"
+version = "0.1.0"
+requires-python = ">=3.12,<3.13"
+description = "Dedicated environment for multimodal generation tools (fundus2oct / fundus2eyeglobe)"
+
+dependencies = [
+  "torch",
+  "torchvision",
+  "pillow",
+  "numpy",
+  "timm",
+  "pytorch-lightning",
+  "einops",
+  "pytorch-msssim",
+  "tqdm",
+]
+
+[tool.uv]

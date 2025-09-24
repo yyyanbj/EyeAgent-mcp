@@ -1,0 +1,22 @@
+[project]
+name = "eyetools-py312-rag"
+version = "0.1.0"
+requires-python = ">=3.12,<3.13"
+description = "RAG tools environment (py312) with Qdrant + LangChain"
+readme = "../../README.md"
+
+# Keep versions reasonably current but compatible; pin only where needed
+dependencies = [
+  "langchain>=0.3.0",
+  "langchain-core>=0.3.0",
+  "langchain-openai>=0.2.0",
+  "langchain-qdrant>=0.2.0",
+  "qdrant-client>=1.11.0",
+  "fastembed>=0.3.1",
+  "pdfminer.six>=20231228",
+  # Optional but useful
+  "httpx>=0.28.1",
+  "pyyaml",
+]
+
+[tool.uv]

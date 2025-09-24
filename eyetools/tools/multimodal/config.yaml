@@ -1,0 +1,37 @@
+package: multimodal
+entry: tool_impl:MultimodalTool
+category: vision
+shared:
+  environment_ref: py312-multimodal
+  runtime:
+    load_mode: subprocess
+    idle_timeout_s: 600
+    device_policy: auto
+    preload: false
+  io:
+    input_schema:
+      image_path: path
+      eye_category: string
+      sampling_steps: integer
+      SE: number
+      AL: number
+    output_schema:
+      output_paths: object
+      inference_time: number
+  model_defaults:
+    precision: auto
+    lazy: true
+variants:
+  - variant: fundus2oct
+    version: 0.1.0
+    params:
+      task: fundus2oct
+  - variant: fundus2eyeglobe
+    version: 0.1.0
+    params:
+      task: fundus2eyeglobe
+metadata:
+  authors: ["EyeAgent Team"]
+  license: Apache-2.0
+notes:
+  - 0.1.0 multimodal initial (fundus2oct, fundus2eyeglobe)

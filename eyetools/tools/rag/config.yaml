@@ -2,9 +2,11 @@ package: rag
 entry: tool_impl:RAGQueryTool
 # Do NOT set category here; discovery will infer from folder (tools/rag) to keep id as 'rag:query'
 shared:
-  environment_ref: py312
+  # Use an isolated environment for RAG to avoid polluting core deps
+  environment_ref: py312-rag
   runtime:
-    load_mode: auto
+    # Run in subprocess so the tool executes under the uv-managed env
+    load_mode: subprocess
     idle_timeout_s: 600
     device_policy: auto
     preload: false
@@ -24,11 +26,20 @@ variants:
     version: 0.1.0
     params:
       top_k: 5
+      # Max PDF pages to extract during indexing/warmup (to cap warmup time)
+      maxpages: 300
+      # Retrieval mode: "qdrant" for hybrid vector search (recommended) or "local" for simple keyword matching
+      mode: qdrant
+      # Vector store settings (paths are resolved relative to tool root if not absolute)
+      collection_name: rag_collection
+      vector_local_path: ../../temp/rag/qdrant
+      doc_local_path: ../../temp/rag/docstore
+      # Chunking for ingestion
+      chunk_size: 800
+      chunk_overlap: 120
       # default corpus directories (relative paths allowed). Override via env or server tool config.
       corpus_dirs:
-        - ../../eyeagent/docs
-        - ../../eyetools/docs
-        - ../../README.md
+        - ../../weights/rag/books
 metadata:
   authors: ["EyeAgent Team"]
   license: Apache-2.0

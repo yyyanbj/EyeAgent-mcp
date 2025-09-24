@@ -26,113 +26,114 @@ shared:
     threshold: 0.5
 variants:
   # Auto-generated list of disease-specific weight folders (finetune & lp)
-  # Each variant maps directly to a folder in weights/disease-specific/<variant>
-  - variant: AH_finetune
+  # Tool names/IDs drop the training suffix (e.g., AMD) while params.variant
+  # preserves the on-disk folder (e.g., AMD_finetune).
+  - variant: AH
     version: 0.1.0
     params: { variant: AH_finetune }
-  - variant: AION_finetune
+  - variant: AION
     version: 0.1.0
     params: { variant: AION_finetune }
-  - variant: AMD_finetune
+  - variant: AMD
     version: 0.1.0
     params: { variant: AMD_finetune }
-  - variant: CM_finetune
+  - variant: CM
     version: 0.1.0
     params: { variant: CM_finetune }
-  - variant: CNV_finetune
+  - variant: CNV
     version: 0.1.0
     params: { variant: CNV_finetune }
-  - variant: CSCR_finetune
+  - variant: CSCR
     version: 0.1.0
     params: { variant: CSCR_finetune }
-  - variant: Coats_finetune
+  - variant: Coats
     version: 0.1.0
     params: { variant: Coats_finetune }
-  - variant: DR_finetune
+  - variant: DR
     version: 0.1.0
     params: { variant: DR_finetune }
-  - variant: ERM_finetune
+  - variant: ERM
     version: 0.1.0
     params: { variant: ERM_finetune }
-  - variant: HR_finetune
+  - variant: HR
     version: 0.1.0
     params: { variant: HR_finetune }
-  - variant: MGS_finetune
+  - variant: MGS
     version: 0.1.0
     params: { variant: MGS_finetune }
-  - variant: MH_finetune
+  - variant: MH
     version: 0.1.0
     params: { variant: MH_finetune }
-  - variant: PCV_finetune
+  - variant: PCV
     version: 0.1.0
     params: { variant: PCV_finetune }
-  - variant: RAO_finetune
+  - variant: RAO
     version: 0.1.0
     params: { variant: RAO_finetune }
-  - variant: RD_finetune
+  - variant: RD
     version: 0.1.0
     params: { variant: RD_finetune }
-  - variant: ROP_finetune
+  - variant: ROP
     version: 0.1.0
     params: { variant: ROP_finetune }
-  - variant: RP_finetune
+  - variant: RP
     version: 0.1.0
     params: { variant: RP_finetune }
-  - variant: RVO_finetune
+  - variant: RVO
     version: 0.1.0
     params: { variant: RVO_finetune }
-  - variant: VHL_finetune
+  - variant: VHL
     version: 0.1.0
     params: { variant: VHL_finetune }
-  - variant: VKH_finetune
+  - variant: VKH
     version: 0.1.0
     params: { variant: VKH_finetune }
-  - variant: WDS_finetune
+  - variant: WDS
     version: 0.1.0
     params: { variant: WDS_finetune }
-  - variant: corneal_ulcer_finetune
+  - variant: corneal_ulcer
     version: 0.1.0
     params: { variant: corneal_ulcer_finetune }
-  - variant: epiphora_finetune
+  - variant: epiphora
     version: 0.1.0
     params: { variant: epiphora_finetune }
-  - variant: glaucoma_finetune
+  - variant: glaucoma
     version: 0.1.0
     params: { variant: glaucoma_finetune }
-  - variant: keratoconus_finetune
+  - variant: keratoconus
     version: 0.1.0
     params: { variant: keratoconus_finetune }
-  - variant: macular_dystrophy_finetune
+  - variant: macular_dystrophy
     version: 0.1.0
     params: { variant: macular_dystrophy_finetune }
-  - variant: metaPM_finetune
+  - variant: metaPM
     version: 0.1.0
     params: { variant: metaPM_finetune }
-  - variant: nuclear_cataract_1_finetune
-    version: 0.1.0
-    params: { variant: nuclear_cataract_1_finetune }
-  - variant: nuclear_cataract_2_finetune
-    version: 0.1.0
-    params: { variant: nuclear_cataract_2_finetune }
-  - variant: nuclear_cataract_3_finetune
-    version: 0.1.0
-    params: { variant: nuclear_cataract_3_finetune }
-  - variant: nuclear_cataract_4_finetune
-    version: 0.1.0
-    params: { variant: nuclear_cataract_4_finetune }
-  - variant: nuclear_cataract_finetune
+  # - variant: nuclear_cataract_1
+  #   version: 0.1.0
+  #   params: { variant: nuclear_cataract_1_finetune }
+  # - variant: nuclear_cataract_2
+  #   version: 0.1.0
+  #   params: { variant: nuclear_cataract_2_finetune }
+  # - variant: nuclear_cataract_3
+  #   version: 0.1.0
+  #   params: { variant: nuclear_cataract_3_finetune }
+  # - variant: nuclear_cataract_4
+  #   version: 0.1.0
+  #   params: { variant: nuclear_cataract_4_finetune }
+  - variant: nuclear_cataract
     version: 0.1.0
     params: { variant: nuclear_cataract_finetune }
-  - variant: opaque_cornea_finetune
+  - variant: opaque_cornea
     version: 0.1.0
     params: { variant: opaque_cornea_finetune }
-  - variant: retinoschisis_finetune
+  - variant: retinoschisis
     version: 0.1.0
     params: { variant: retinoschisis_finetune }
-  - variant: toxoplasmosis_finetune
+  - variant: toxoplasmosis
     version: 0.1.0
     params: { variant: toxoplasmosis_finetune }
-  - variant: viral_retinitis_finetune
+  - variant: viral_retinitis
     version: 0.1.0
     params: { variant: viral_retinitis_finetune }
 metadata:

@@ -5,8 +5,10 @@ RETFound Dinov3 ViT-B/16 backbones. Each variant corresponds to a folder under
 `weights/disease-specific/<variant>` that contains a `checkpoint-best.pth`.
 
 ## Variants
-All `*_finetune` and `*_lp` (linear probing) folders are auto-registered via
-`config.yaml`. Example variants: `AMD_finetune`, `AMD_lp`, `DR_finetune`, etc.
+All `*_finetune` and `*_lp` (linear probing) folders are discovered, but the
+exposed tool names now drop the training suffix. For example, the tool ID is
+`vision.disease_specific_cls:AMD` while the underlying weights folder remains
+`weights/disease-specific/AMD_finetune`.
 
 ## Environment
 Models load in the dedicated `py311-retfound` uv environment (Python 3.11 per
@@ -18,6 +20,7 @@ upstream RETFound README) which includes `torch==2.5.1`, `torchvision==0.20.1`,
 ## Usage (Programmatic)
 ```python
 from tools.disease_specific_cls.tool_impl import load_tool
+# Programmatic convenience still accepts the on-disk folder name.
 tool = load_tool("AMD_finetune")  # loads weights/disease-specific/AMD_finetune/checkpoint-best.pth
 out = tool.predict({"image_path": "examples/test_images/AMD.jpg"})
 print(out)
@@ -41,7 +44,7 @@ PY
 
 curl -X POST "http://127.0.0.1:5789/predict" \
   -H "Content-Type: application/json" \
-  -d '{"tool_id":"disease-specific:AMD_finetune","request":{"image_path":"examples/test_images/DR lesion.jpg"}}'
+  -d '{"tool_id":"vision.disease_specific_cls:AMD","request":{"image_path":"examples/test_images/DR lesion.jpg"}}'
 
 ## Prediction Output Schema
 ```json
@@ -68,6 +71,12 @@ loaded with `strict=False` so missing keys are tolerated.
 ## Threshold
 Default decision threshold is `0.5`; override per variant by supplying
 `params.threshold` when instantiating or editing `config.yaml`.
+
+## Naming change summary
+- Tool IDs: suffix removed (e.g., `vision.disease_specific_cls:AMD`).
+- Weight paths: unchanged on disk (e.g., `weights/disease-specific/AMD_finetune`).
+- Mechanism: `config.yaml` maps the user-facing `variant` (no suffix) to
+  `params.variant` (with `_finetune`) used internally for loading.
 
 ## Notes
 - Checkpoints are expected to be saved as raw state dicts or dicts with

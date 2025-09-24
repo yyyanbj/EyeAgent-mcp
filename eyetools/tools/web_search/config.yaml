@@ -19,12 +19,14 @@ shared:
   model_defaults:
     lazy: true
 variants:
-  - variant: pubmed
+  - id: web_search:pubmed
+    variant: pubmed
     version: 0.1.0
     params:
       provider: pubmed
       top_k: 3
-  - variant: tavily
+  - id: web_search:tavily
+    variant: tavily
     version: 0.1.0
     params:
       provider: tavily

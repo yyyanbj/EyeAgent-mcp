@@ -20,6 +20,23 @@ def _http_get_json(url: str, headers: Dict[str, str] | None = None, timeout: int
         return None
 
 
+def _http_post_json(url: str, payload: Dict[str, Any], headers: Dict[str, str] | None = None, timeout: int = 10) -> Dict[str, Any] | List[Any] | None:
+    try:
+        body = json.dumps(payload).encode("utf-8")
+        base_headers = {"User-Agent": "eyetools-websearch/0.1", "Content-Type": "application/json"}
+        if headers:
+            base_headers.update(headers)
+        req = Request(url, data=body, headers=base_headers, method="POST")
+        with urlopen(req, timeout=timeout) as resp:  # nosec - trusted simple POST
+            data = resp.read().decode("utf-8", errors="ignore")
+            try:
+                return json.loads(data)
+            except Exception:
+                return None
+    except Exception:
+        return None
+
+
 class WebSearchTool:
     """Unified web search tool.
 
@@ -88,12 +105,20 @@ class WebSearchTool:
         api_key = os.getenv("TAVILY_API_KEY")
         if not api_key:
             return {"items": [], "source": "tavily", "warning": "TAVILY_API_KEY not set", "inference_time": round(time.time() - start, 4)}
-        params = {"api_key": api_key, "query": query, "max_results": max(1, min(10, top_k))}
-        url = "https://api.tavily.com/search?" + urlencode(params)
-        js = _http_get_json(url)
+        # Tavily Search API expects POST with JSON body
+        payload = {
+            "api_key": api_key,
+            "query": query,
+            "search_depth": "advanced",
+            "max_results": max(1, min(10, top_k)),
+        }
+        url = "https://api.tavily.com/search"
+        js = _http_post_json(url, payload)
         items: List[Dict[str, Any]] = []
         if isinstance(js, dict):
-            for r in js.get("results", []) or []:
+            # Tavily returns either 'results' or 'results' nested depending on plan; handle conservatively
+            results = js.get("results", []) or []
+            for r in results:
                 if isinstance(r, dict):
                     items.append({
                         "title": r.get("title"),
