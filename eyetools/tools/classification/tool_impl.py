@@ -88,10 +88,15 @@ class ClassificationTool:
         self.classes = TASK_CLASS_MAP[self.task]
         self.model, self.img_size = create_model(self.task, self.classes, self.weights_root)
         self.model.to(self.device).eval()
+        # Mirror legacy preprocessing: for age use ImageNet normalization; otherwise no normalization
+        if self.task == "cfp_age":
+            mean, std = [0.485, 0.456, 0.406], [0.229, 0.224, 0.225]
+        else:
+            mean, std = [0, 0, 0], [1, 1, 1]
         self.transform = transforms.Compose([
             transforms.Resize((self.img_size, self.img_size)),
             transforms.ToTensor(),
-            transforms.Normalize([0.485,0.456,0.406],[0.229,0.224,0.225]),
+            transforms.Normalize(mean, std),
         ])
         self._model_loaded = True
 
@@ -120,18 +125,19 @@ class ClassificationTool:
             # Clamp to a reasonable range to avoid outliers from raw regression
             val = max(40, min(val, 70))
             return {"task": self.task, "prediction": val, "unit": "years", "inference_time": round(dur,4)}
-        multilabel = self.task == "multidis"
-        # CSRA outputs raw logits; for single-label tasks (non-multidis) apply softmax
-        probs = (torch.sigmoid(logits) if multilabel else torch.softmax(logits, dim=1)).squeeze().cpu().tolist()
+        # Legacy behavior: use sigmoid scores + threshold for all classification tasks (non-age)
+        probs = torch.sigmoid(logits).squeeze().cpu().tolist()
         pairs = list(zip(self.classes, probs))
-        if multilabel:
+        if self.task == "multidis":
             sign_set = set(MULTIDIS_SIGNS.get("sign", []))
             pairs = [p for p in pairs if p[0] not in sign_set]
             filtered = [p for p in pairs if p[1] >= self.threshold]
             if len(filtered) < DEFAULT_SHOW_N[self.task]:
                 filtered = sorted(pairs, key=lambda x: x[1], reverse=True)[: DEFAULT_SHOW_N[self.task]]
         else:
-            filtered = sorted(pairs, key=lambda x: x[1], reverse=True)[: DEFAULT_SHOW_N[self.task]]
+            filtered = [p for p in pairs if p[1] >= self.threshold]
+            if len(filtered) < DEFAULT_SHOW_N[self.task]:
+                filtered = sorted(pairs, key=lambda x: x[1], reverse=True)[: DEFAULT_SHOW_N[self.task]]
         # Provide a single "prediction" field (top-1 label) for downstream consumers (e.g., UI)
         top_label = filtered[0][0] if filtered else None
         out: Dict[str, Any] = {
