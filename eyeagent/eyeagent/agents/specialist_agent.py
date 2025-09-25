@@ -11,7 +11,12 @@ class SpecialistAgent(DiagnosticBaseAgent):
     name = "SpecialistAgent"
     allowed_tool_ids: List[str] = []  # decided at runtime based on candidate diseases
     system_prompt = (
-        "You are the specialist agent. For candidate diseases, call corresponding grading models and return results with reasoning."
+        "ROLE: Disease-specific grading (specialist).\n"
+        "GOAL: For candidate diseases, select appropriate disease-specific grading tools and produce grades with confidence.\n"
+        "INPUTS: candidate_diseases (list), images, upstream findings as context.\n"
+        "TOOLS: disease_specific_cls:* (resolved dynamically from candidates; filtered by config when needed).\n"
+        "OUTPUTS: disease_grades (flat list), per_image mapping, and a short narrative.\n"
+        "CONSTRAINTS: Keep reasoning focused on grading outcomes and confidence; do not perform routing or final report synthesis."
     )
 
     # Capabilities declaration for specialist

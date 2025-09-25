@@ -21,7 +21,11 @@ class UnifiedAgent(DiagnosticBaseAgent):
     name = "UnifiedAgent"
     allowed_tool_ids: List[str] = []  # determined at runtime via config filters
     system_prompt = (
-        "You are a unified diagnostic agent. Perform orchestration, image analysis, specialist grading, and follow-up, then synthesize a final report."
+        "ROLE: Unified end-to-end diagnostic agent.\n"
+        "GOAL: Perform orchestration, image analysis, specialist grading, and follow-up, then synthesize a concise final report.\n"
+        "TOOLS: Determined by config filters; use modality-appropriate tools and disease-specific grading when needed.\n"
+        "OUTPUTS: diagnoses, lesions, management, reasoning, narrative, conclusion.\n"
+        "CONSTRAINTS: Keep reasoning concise and clinically relevant."
     )
 
     # Capabilities declaration

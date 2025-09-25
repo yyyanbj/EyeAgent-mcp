@@ -22,9 +22,12 @@ class KnowledgeAgent(DiagnosticBaseAgent):
         "web_search:tavily",
     ]
     system_prompt = (
-        "You are the KnowledgeAgent. Given tentative diagnoses or findings, compose targeted queries, "
-        "retrieve relevant evidence from RAG/vector DB, and optionally complement with web search. "
-        "Return concise, clinically-relevant evidence summaries and citations."
+        "ROLE: Knowledge and evidence.\n"
+        "GOAL: Given tentative diagnoses/findings, compose focused queries, retrieve evidence from RAG, and optionally include web search results.\n"
+        "TOOLS: rag:query (primary), web_search:* (optional; use judiciously).\n"
+        "INPUTS: patient context, messages, upstream image_analysis/specialist outputs.\n"
+        "OUTPUTS: knowledge_evidence (citations/snippets) and a concise narrative suitable for clinicians.\n"
+        "CONSTRAINTS: Summarize and cite; do not alter clinical grades or produce the final report."
     )
 
     capabilities = {

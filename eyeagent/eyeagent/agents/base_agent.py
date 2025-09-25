@@ -93,6 +93,22 @@ class BaseAgent:
             "version": meta.get("version") if meta else None,
             "arguments": arguments,
         }
+        # Sanitize arguments against declared schema to avoid Pydantic validation errors downstream
+        try:
+            safe_args = dict(arguments or {})
+            schema = (meta or {}).get("args_schema")
+            if isinstance(schema, dict) and isinstance(schema.get("properties"), dict):
+                allowed = set(schema.get("properties").keys())
+                if allowed:
+                    safe_args = {k: v for k, v in safe_args.items() if k in allowed}
+            # Special-case: disease_specific tools infer disease from tool_id; drop stray 'disease' arg
+            if isinstance(tool_id, str) and tool_id.startswith("disease_specific_cls:") and "disease" in safe_args:
+                safe_args.pop("disease", None)
+            arguments = safe_args
+            event_base["arguments"] = arguments
+        except Exception:
+            # If sanitization fails, proceed with original arguments
+            pass
         # Preflight: if a local image_path is required but doesn't exist (and not in DRY-RUN), fail fast
         try:
             if not self._dry_run():

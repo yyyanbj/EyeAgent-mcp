@@ -94,7 +94,7 @@ def _resolve_media_path(p: str) -> Optional[str]:
     return None
 
 
-def _format_agent_bubble(agent: str, role: str, reasoning: Optional[str], outputs_preview: Optional[str] = None, seq: Optional[int] = None, tool_calls: Optional[List[Dict[str, Any]]] = None) -> str:
+def _format_agent_bubble(agent: str, role: str, reasoning: Optional[str], outputs_preview: Optional[str] = None, seq: Optional[int] = None, tool_calls: Optional[List[Dict[str, Any]]] = None, header_badge_html: Optional[str] = None) -> str:
     title = f"{html.escape(agent)} ({html.escape(role)})" if role else html.escape(agent)
     if seq is not None:
         title = f"#{seq} • " + title
@@ -135,6 +135,7 @@ def _format_agent_bubble(agent: str, role: str, reasoning: Optional[str], output
         "<div style='background:#ffffff; border:1px solid #e0e0e0; border-left:4px solid #7cb342; padding:10px;"
         " margin:6px 0; border-radius:6px;'>"
         f"<div style='font-weight:600;color:#1b5e20; margin-bottom:6px;'>{title}</div>"
+        f"{header_badge_html or ''}"
         f"<div style='color:#111; white-space: pre-wrap;font-size:0.95em'>{body}</div>"
         f"{details}"
         "</div>"
@@ -237,6 +238,75 @@ def _summarize_tool_output(output: Any, max_items: int = 5, mcp_meta: Optional[D
     # Explicit error message from tool payload
     if isinstance(output.get("error"), str) and output.get("error"):
         parts.append(f"<div style='color:#b71c1c'><strong>Error:</strong> {html.escape(str(output.get('error')))}</div>")
+
+    # RAG / Web Search style results
+    # Root-level source/warning/answer
+    src = output.get("source")
+    if isinstance(src, str) and src:
+        parts.append(
+            "<div style='margin:4px 0'>"
+            "<span style='display:inline-block;background:#e3f2fd;color:#0d47a1;border:1px solid #90caf9;"
+            "padding:2px 8px;border-radius:999px;font-size:12px;'>"
+            f"Source: {html.escape(src)}"
+            "</span>"
+            "</div>"
+        )
+    warn = output.get("warning")
+    if isinstance(warn, str) and warn:
+        parts.append(
+            f"<div style='color:#b26a00;background:#fff8e1;border:1px solid #ffe082;padding:6px;border-radius:4px;margin:6px 0;'>"
+            f"<strong>Warning:</strong> {html.escape(warn)}</div>"
+        )
+    ans = output.get("answer")
+    if isinstance(ans, str) and ans:
+        parts.append(f"<div><strong>Answer:</strong> {html.escape(ans)}</div>")
+
+    items = output.get("items")
+    if isinstance(items, list) and items:
+        # Render up to max_items entries with title/link/snippet/score/meta
+        rendered: List[str] = []
+        def _pick(d: Dict[str, Any], keys: List[str]) -> Optional[Any]:
+            for k in keys:
+                v = d.get(k)
+                if v is not None:
+                    return v
+            return None
+        for itm in items[:max_items]:
+            if not isinstance(itm, dict):
+                continue
+            title = _pick(itm, ["title", "name"]) or None
+            url = _pick(itm, ["url", "link", "href"]) or None
+            snippet = _pick(itm, ["snippet", "text", "content", "summary"]) or None
+            score = _pick(itm, ["score", "relevance", "similarity"]) or None
+            doc_id = _pick(itm, ["doc_id", "document_id", "id"]) or None
+            page = _pick(itm, ["page", "page_number"]) or None
+            # Fallback title from snippet if absent
+            if not title and isinstance(snippet, str):
+                t = snippet.strip().splitlines()[0][:80]
+                title = (t + ("…" if len(snippet.strip()) > len(t) else "")) if t else "Result"
+            title_html = html.escape(str(title)) if title is not None else "Result"
+            if isinstance(url, str) and url:
+                title_html = f"<a href='{html.escape(url)}' target='_blank' rel='noopener noreferrer'>{title_html}</a>"
+            # Snippet block, trimmed for safety
+            snippet_html = ""
+            if isinstance(snippet, str) and snippet:
+                s = snippet.strip()
+                if len(s) > 500:
+                    s = s[:500] + "…"
+                snippet_html = f"<div style='margin-top:2px;color:#37474f;font-size:0.9em;line-height:1.4'>{html.escape(s)}</div>"
+            meta_bits: List[str] = []
+            if score is not None:
+                meta_bits.append(f"score: <code>{html.escape(str(score))}</code>")
+            if doc_id is not None:
+                meta_bits.append(f"doc_id: <code>{html.escape(str(doc_id))}</code>")
+            if page is not None:
+                meta_bits.append(f"page: <code>{html.escape(str(page))}</code>")
+            meta_html = ("<div style='color:#6b7280;font-size:0.85em;margin-top:2px'>" + " | ".join(meta_bits) + "</div>") if meta_bits else ""
+            rendered.append(f"<li><div><strong>{title_html}</strong></div>{snippet_html}{meta_html}</li>")
+        if rendered:
+            parts.append(
+                f"<div><strong>Results:</strong><ul style='margin:4px 0 0 18px'>{''.join(rendered)}</ul></div>"
+            )
     # classification style (general)
     preds = output.get("predictions")
     probs = output.get("probabilities")
@@ -337,6 +407,55 @@ def _summarize_agent_outputs(outputs: Any, max_items: int = 5) -> Optional[str]:
     if not isinstance(outputs, dict):
         return None
     parts: List[str] = []
+    # knowledge agent: show query and compact evidence list if present
+    qtxt = outputs.get("query")
+    if isinstance(qtxt, str) and qtxt.strip():
+        parts.append(f"<div><strong>Query:</strong> {html.escape(qtxt.strip())}</div>")
+    kev = outputs.get("knowledge_evidence")
+    if isinstance(kev, list) and kev:
+        flattened: List[Dict[str, Any]] = []
+        for blk in kev:
+            if isinstance(blk, dict):
+                items = blk.get("items") or blk.get("documents") or blk.get("results") or []
+            elif isinstance(blk, list):
+                items = blk
+            else:
+                items = []
+            if isinstance(items, list):
+                for it in items:
+                    if isinstance(it, dict):
+                        flattened.append(it)
+        # Render top-K evidence entries (best-effort sort by score if available)
+        try:
+            flattened.sort(key=lambda d: float(d.get("score") or d.get("relevance") or d.get("similarity") or 0), reverse=True)
+        except Exception:
+            pass
+        rendered: List[str] = []
+        for itm in flattened[:max_items]:
+            title = itm.get("title") or itm.get("name") or itm.get("id") or itm.get("source") or "Evidence"
+            src = itm.get("source") or itm.get("url") or itm.get("link")
+            snip = itm.get("snippet") or itm.get("text") or itm.get("content") or itm.get("summary")
+            score = itm.get("score") or itm.get("relevance") or itm.get("similarity")
+            title_html = html.escape(str(title))
+            if isinstance(src, str) and src:
+                # clickable if looks like URL
+                if src.startswith("http://") or src.startswith("https://"):
+                    title_html = f"<a href='{html.escape(src)}' target='_blank' rel='noopener noreferrer'>{title_html}</a>"
+            meta_bits: List[str] = []
+            if src:
+                meta_bits.append(f"source: <code>{html.escape(str(src))}</code>")
+            if score is not None:
+                meta_bits.append(f"score: <code>{html.escape(str(score))}</code>")
+            meta_html = ("<div style='color:#6b7280;font-size:0.85em;margin-top:2px'>" + " | ".join(meta_bits) + "</div>") if meta_bits else ""
+            snip_html = ""
+            if isinstance(snip, str) and snip:
+                s = snip.strip()
+                if len(s) > 300:
+                    s = s[:300] + "…"
+                snip_html = f"<div style='margin-top:2px;color:#37474f;font-size:0.9em;line-height:1.4'>{html.escape(s)}</div>"
+            rendered.append(f"<li><div><strong>{title_html}</strong></div>{snip_html}{meta_html}</li>")
+        if rendered:
+            parts.append(f"<div><strong>Evidence:</strong><ul style='margin:4px 0 0 18px'>{''.join(rendered)}</ul></div>")
     # quality
     q = outputs.get("quality")
     if isinstance(q, dict):
@@ -370,6 +489,37 @@ def _summarize_agent_outputs(outputs: Any, max_items: int = 5) -> Optional[str]:
     if not parts:
         return None
     return "".join(parts)
+
+
+def _build_orchestrator_badge(outputs: Optional[Dict[str, Any]]) -> Optional[str]:
+    if not isinstance(outputs, dict):
+        return None
+    next_agent = outputs.get("next_agent")
+    reasons = outputs.get("routing_reasons")
+    pills: List[str] = []
+    if isinstance(next_agent, str) and next_agent:
+        pills.append(
+            "<span style='display:inline-block;background:#e3f2fd;color:#0d47a1;border:1px solid #90caf9;padding:2px 8px;border-radius:999px;font-size:12px;margin-right:6px;'>"
+            f"Next: {html.escape(next_agent)}"
+            "</span>"
+        )
+    reason_text = None
+    if isinstance(reasons, list) and reasons:
+        # Limit to 2 reasons inline; append +N more if longer
+        top = [str(r) for r in reasons[:2]]
+        more = len(reasons) - len(top)
+        reason_text = "; ".join([html.escape(t) for t in top]) + (f" (+{more} more)" if more > 0 else "")
+    elif isinstance(reasons, str) and reasons:
+        reason_text = html.escape(reasons)
+    if reason_text:
+        pills.append(
+            "<span style='display:inline-block;background:#f3f4f6;color:#374151;border:1px solid #e5e7eb;padding:2px 8px;border-radius:999px;font-size:12px;'>"
+            f"{reason_text}"
+            "</span>"
+        )
+    if not pills:
+        return None
+    return "<div style='margin-bottom:6px'>" + "".join(pills) + "</div>"
 
 
 def _image_to_data_uri(p: str) -> Optional[str]:
@@ -406,10 +556,16 @@ def _embed_images_html(paths: List[str], max_images: int = 4, thumb_w: int = 240
     )
 
 
-async def _run_and_stream(patient: Dict[str, Any], image_paths: List[str], progress: gr.Progress, chatbot: gr.Chatbot, initial_messages: Optional[List[Dict[str, str]]] = None) -> AsyncGenerator[Tuple[List[Dict[str, str]], Dict[str, Any] | str | None], None]:
-    # Import here to respect MCP_SERVER_URL passed via CLI before main sets env
+async def _run_and_stream(patient: Dict[str, Any], image_paths: List[str], progress: gr.Progress, chatbot: gr.Chatbot, initial_messages: Optional[List[Dict[str, str]]] = None, workflow_backend: Optional[str] = None) -> AsyncGenerator[Tuple[List[Dict[str, str]], Dict[str, Any] | str | None], None]:
+    # Respect per-run workflow backend (if provided) and MCP_SERVER_URL passed via CLI before importing workflow
+    if workflow_backend:
+        os.environ["EYEAGENT_WORKFLOW_BACKEND"] = workflow_backend
     from eyeagent.diagnostic_workflow import run_diagnosis_async
     trace = TraceLogger()
+    try:
+        logger.info("[ui] _run_and_stream starting with {} images: {}", len(image_paths or []), image_paths)
+    except Exception:
+        pass
     images = [{"image_id": Path(p).stem, "path": p} for p in image_paths]
     case_id = trace.create_case(patient=patient, images=images)
 
@@ -431,6 +587,9 @@ async def _run_and_stream(patient: Dict[str, Any], image_paths: List[str], progr
                 pass
         if thumbs:
             messages.append({"role": "user", "content": "<div style='margin-bottom:8px'>" + ''.join(thumbs) + "</div>"})
+    # Add a plain-text list of image paths as a user message so agents see the paths in context
+    # if image_paths:
+    #     messages.append({"role": "user", "content": "Images (paths):\n" + "\n".join(image_paths)})
     if initial_messages:
         # Only keep safe roles and string content
         for m in initial_messages:
@@ -482,7 +641,8 @@ async def _run_and_stream(patient: Dict[str, Any], image_paths: List[str], progr
                         reasoning = ev.get("reasoning")
                         outputs_prev = _summarize_agent_outputs(ev.get("outputs"))
                         tool_calls = ev.get("tool_calls") if isinstance(ev.get("tool_calls"), list) else None
-                        msgs.append({"role": "assistant", "content": _format_agent_bubble(agent, role, reasoning, outputs_prev, seq=ev.get("seq"), tool_calls=tool_calls)})
+                        header_badge = _build_orchestrator_badge(ev.get("outputs") if (isinstance(role, str) and role.lower()=="orchestrator") else None)
+                        msgs.append({"role": "assistant", "content": _format_agent_bubble(agent, role, reasoning, outputs_prev, seq=ev.get("seq"), tool_calls=tool_calls, header_badge_html=header_badge)})
                         print(f"[agent_step] {agent} ({role})")
                     elif et == "error":
                         msgs.append({"role": "assistant", "content": f"[error] {ev.get('message', 'Error')}"})
@@ -546,7 +706,8 @@ def _events_to_messages(events: List[Dict[str, Any]], case_id: Optional[str] = N
             reasoning = ev.get("reasoning")
             outputs_prev = _summarize_agent_outputs(ev.get("outputs"))
             tool_calls = ev.get("tool_calls") if isinstance(ev.get("tool_calls"), list) else None
-            msgs.append({"role": "assistant", "content": _format_agent_bubble(agent, role, reasoning, outputs_prev, tool_calls=tool_calls)})
+            header_badge = _build_orchestrator_badge(ev.get("outputs") if (isinstance(role, str) and role.lower()=="orchestrator") else None)
+            msgs.append({"role": "assistant", "content": _format_agent_bubble(agent, role, reasoning, outputs_prev, tool_calls=tool_calls, header_badge_html=header_badge)})
         elif et == "error":
             msgs.append({"role": "assistant", "content": f"[error] {ev.get('message', 'Error')}"})
     return msgs
@@ -643,6 +804,20 @@ def build_interface() -> gr.Blocks:
                     patient_age = gr.Number(label="Age", value=60)
                     patient_gender = gr.Dropdown(choices=["M", "F", "Other"], value="M", label="Gender")
 
+            # Workflow backend selector
+            try:
+                from eyeagent.config.settings import get_workflow_backend as _get_wf_backend
+                _default_backend = _get_wf_backend()
+            except Exception:
+                _default_backend = "langgraph"
+            backend_dropdown = gr.Dropdown(
+                label="Workflow Backend",
+                choices=["langgraph", "profile", "interaction"],
+                value=_default_backend,
+                interactive=True,
+                info="Choose orchestration backend for this run"
+            )
+
             run_btn = gr.Button("Run Diagnosis", variant="primary")
             chatbot = gr.Chatbot(label="Live Multi-Agent Trace", type="messages")
             # Preset dropdown (single-select) that fills the Quick Insert field (does not send to chat)
@@ -654,20 +829,38 @@ def build_interface() -> gr.Blocks:
 
             show_patient.change(lambda v: gr.update(visible=bool(v)), inputs=show_patient, outputs=patient_section)
 
-            async def on_run(files: List[str], instr: str, show_p: bool, pid: str, age: float, gender: str, msgs_state: List[Dict[str, str]]):
+            async def on_run(files: List[Any], instr: str, show_p: bool, pid: str, age: float, gender: str, backend_choice: Optional[str], msgs_state: List[Dict[str, str]]):
                 if show_p:
                     patient = {"patient_id": pid or "UI-Patient", "age": int(age or 0), "gender": gender or "Unknown"}
                 else:
                     patient = {"patient_id": "UI-Patient"}
                 if instr:
                     patient["instruction"] = instr
-                file_paths = files or []
+                # Normalize files to list[str] (gradio may send str or dict depending on version)
+                file_paths: List[str] = []
+                try:
+                    for f in (files or []):
+                        if isinstance(f, str):
+                            file_paths.append(f)
+                        elif isinstance(f, dict):
+                            # Prefer 'path' if present else 'name'
+                            p = f.get("path") or f.get("name")
+                            if isinstance(p, str):
+                                file_paths.append(p)
+                except Exception:
+                    # Fallback: use as-is if iterable fails
+                    if isinstance(files, list):
+                        file_paths = [str(x) for x in files]
+                try:
+                    logger.info("[ui] on_run received files count={} paths={}", len(file_paths), file_paths)
+                except Exception:
+                    pass
                 progress = gr.Progress(track_tqdm=False)
                 # Ensure user instruction is also shown as a user message on the right
                 initial_msgs = list(msgs_state or [])
                 if instr and not any((m.get("role") == "user" and m.get("content") == instr) for m in initial_msgs[-3:]):
                     initial_msgs.append({"role": "user", "content": instr})
-                async for msgs, result in _run_and_stream(patient, file_paths, progress, chatbot, initial_messages=initial_msgs):
+                async for msgs, result in _run_and_stream(patient, file_paths, progress, chatbot, initial_messages=initial_msgs, workflow_backend=backend_choice):
                     yield msgs, result, msgs
 
             def load_presets():
@@ -700,10 +893,18 @@ def build_interface() -> gr.Blocks:
             preset_dropdown.change(on_presets_select, inputs=[preset_dropdown], outputs=[quick_input])
             quick_input.submit(quick_insert, inputs=[instruction, quick_input, chat_state], outputs=[instruction, chatbot, chat_state, quick_input])
 
-            run_btn.click(on_run, inputs=[image_uploader, instruction, show_patient, patient_id, patient_age, patient_gender, chat_state], outputs=[chatbot, final_json, chat_state])
+            run_btn.click(on_run, inputs=[image_uploader, instruction, show_patient, patient_id, patient_age, patient_gender, backend_dropdown, chat_state], outputs=[chatbot, final_json, chat_state])
 
             # Wire image uploader to gallery preview
             def update_gallery(files: List[str]):
+                # Log uploaded image paths for visibility in server logs
+                try:
+                    if files:
+                        logger.info("[ui] Uploaded images ({}): {}", len(files), files)
+                    else:
+                        logger.info("[ui] Uploaded images: none")
+                except Exception:
+                    pass
                 return files or []
 
             image_uploader.change(update_gallery, inputs=[image_uploader], outputs=[image_gallery])
@@ -845,11 +1046,15 @@ def main():
     parser = argparse.ArgumentParser(description="EyeAgent UI")
     parser.add_argument("--mcp-url", dest="mcp_url", help="MCP server base URL (e.g., http://localhost:8000/mcp/)")
     parser.add_argument("--port", dest="port", type=int, default=None, help="UI server port (default 7860 or EYEAGENT_UI_PORT)")
+    parser.add_argument("--workflow-backend", dest="workflow_backend", choices=["langgraph", "profile", "interaction"], help="Select workflow backend for this UI session")
     args = parser.parse_args()
 
     # If provided, set MCP_SERVER_URL before any diagnostic workflow imports occur
     if args.mcp_url:
         os.environ["MCP_SERVER_URL"] = args.mcp_url
+    # Optional: set workflow backend for the entire UI session (can still be overridden per-run via dropdown)
+    if args.workflow_backend:
+        os.environ["EYEAGENT_WORKFLOW_BACKEND"] = args.workflow_backend
 
     demo = build_interface()
     # determine repository root to allow serving media files generated outside CWD
@@ -860,6 +1065,34 @@ def main():
     if os.getenv("GRADIO_TEMP_DIR"):
         allowed.add(os.getenv("GRADIO_TEMP_DIR"))
     allowed.add("/tmp")
+    # Enable Gradio request queue to better handle long-running responses and avoid timeouts.
+    # Configure via env vars if needed:
+    #   EYEAGENT_UI_CONCURRENCY: number of concurrent jobs processed by the queue (default 1)
+    #   EYEAGENT_UI_QUEUE_SIZE: maximum number of pending jobs in the queue (default 32)
+    #   EYEAGENT_UI_STATUS_RATE: seconds between status updates to clients (default 1.0)
+    try:
+        concurrency = int(os.getenv("EYEAGENT_UI_CONCURRENCY", "1"))
+    except Exception:
+        concurrency = 1
+    try:
+        queue_size = int(os.getenv("EYEAGENT_UI_QUEUE_SIZE", "32"))
+    except Exception:
+        queue_size = 32
+    try:
+        status_rate = float(os.getenv("EYEAGENT_UI_STATUS_RATE", "1.0"))
+    except Exception:
+        status_rate = 1.0
+
+    # Gradio API compatibility: some versions use default_concurrency_limit instead of concurrency_count
+    try:
+        demo = demo.queue(default_concurrency_limit=concurrency, max_size=queue_size, status_update_rate=status_rate)
+    except TypeError:
+        try:
+            demo = demo.queue(concurrency_count=concurrency, max_size=queue_size, status_update_rate=status_rate)
+        except TypeError:
+            # Fall back to defaults if parameters are not supported
+            demo = demo.queue()
+
     demo.launch(
         server_name="0.0.0.0",
         server_port=(args.port or int(os.getenv("EYEAGENT_UI_PORT", "7860"))),

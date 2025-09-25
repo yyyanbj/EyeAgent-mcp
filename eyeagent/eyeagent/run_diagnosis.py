@@ -7,6 +7,7 @@ uv run python run_diagnosis.py \
     --images '[{"image_id":"IMG001","path":"/data/img1.jpg"}]'
 """
 import argparse
+import os
 import json
 from .diagnostic_workflow import run_diagnosis
 
@@ -15,6 +16,11 @@ def parse_args():
     ap = argparse.ArgumentParser(description="Run Ophthalmology Diagnostic Workflow")
     ap.add_argument("--patient", required=True, help="Patient JSON string")
     ap.add_argument("--images", required=True, help="Images JSON array; each item has image_id/path")
+    ap.add_argument(
+        "--workflow-backend",
+        choices=["langgraph", "profile", "interaction"],
+        help="Override workflow backend for this run",
+    )
     return ap.parse_args()
 
 
@@ -22,6 +28,9 @@ def main():
     args = parse_args()
     patient = json.loads(args.patient)
     images = json.loads(args.images)
+    # Optional per-run backend override
+    if args.workflow_backend:
+        os.environ["EYEAGENT_WORKFLOW_BACKEND"] = args.workflow_backend
     report = run_diagnosis(patient, images)
     print(json.dumps(report, ensure_ascii=False, indent=2))
 

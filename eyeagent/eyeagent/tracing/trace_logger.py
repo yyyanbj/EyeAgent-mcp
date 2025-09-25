@@ -232,8 +232,21 @@ class TraceLogger:
                     pass
         except Exception:
             pass
-        with open(tmp_path, 'w', encoding='utf-8') as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
-            f.flush()
-            os.fsync(f.fileno())
-        os.replace(tmp_path, path)
+        try:
+            with open(tmp_path, 'w', encoding='utf-8') as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp_path, path)
+        except OSError as e:
+            # Gracefully handle no-space-left-on-device: attempt to write a tiny marker file,
+            # otherwise skip persisting this update to avoid crashing the workflow.
+            if e.errno == 28:  # ENOSPC
+                try:
+                    # Write a minimal marker without fsync to reduce space pressure
+                    with open(path, 'w', encoding='utf-8') as f:
+                        f.write('{"error":"trace logging skipped due to ENOSPC"}')
+                except Exception:
+                    pass
+            else:
+                raise

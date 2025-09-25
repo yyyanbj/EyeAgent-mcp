@@ -18,9 +18,10 @@ DEFAULT_SETTINGS: Dict[str, Any] = {
             # "OrchestratorAgent": {"model": "gpt-4o-mini"}
         },
     },
-    # Workflow + agent wiring is config-driven; default to unified
+    # Workflow + agent wiring is config-driven; default backend is LangGraph
     "workflow": {
-        "mode": os.getenv("EYEAGENT_WORKFLOW_MODE", "unified"),  # unified | graph | interaction | profile
+        "mode": "graph",   # kept for compatibility
+        "backend": os.getenv("EYEAGENT_WORKFLOW_BACKEND", "langgraph"),  # langgraph | profile | interaction
         "specialist": {
             # threshold to select candidate diseases from screening probabilities
             "candidate_threshold": float(os.getenv("EYEAGENT_CANDIDATE_THRESHOLD", "0.3")),
@@ -31,6 +32,10 @@ DEFAULT_SETTINGS: Dict[str, Any] = {
     "agents": {
         "unified": {
             "class": "eyeagent.agents.unified_agent.UnifiedAgent",
+            "enabled": True,
+        },
+        "preliminary": {
+            "class": "eyeagent.agents.preliminary_agent.PreliminaryAgent",
             "enabled": True,
         },
         "orchestrator": {
@@ -60,7 +65,7 @@ DEFAULT_SETTINGS: Dict[str, Any] = {
     },
     # Optional tool filters per agent
     "tools_filter": {
-        "OrchestratorAgent": {
+        "PreliminaryAgent": {
             "include": ["classification:(modality|laterality|multidis)"]
         },
         "ImageAnalysisAgent": {
@@ -152,6 +157,31 @@ def get_workflow_mode() -> str:
     cfg = Settings().load()
     mode = (cfg.get("workflow") or {}).get("mode") or "unified"
     return str(mode).lower()
+
+
+def get_workflow_backend() -> str:
+    """Return the configured backend name.
+
+    Valid values: langgraph | profile | interaction
+    Fallback order:
+    - workflow.backend (explicit)
+    - map legacy workflow.mode to a backend (graph->langgraph, interaction->interaction, profile->profile)
+    - default: langgraph
+    """
+    cfg = Settings().load()
+    wf = cfg.get("workflow") or {}
+    backend = (wf.get("backend") or "").strip().lower()
+    if backend in {"langgraph", "profile", "interaction"}:
+        return backend
+    # map legacy mode
+    mode = str((wf.get("mode") or "")).strip().lower()
+    if mode == "graph":
+        return "langgraph"
+    if mode == "interaction":
+        return "interaction"
+    if mode == "profile":
+        return "profile"
+    return "langgraph"
 
 
 def get_specialist_selection_settings() -> Dict[str, Any]:

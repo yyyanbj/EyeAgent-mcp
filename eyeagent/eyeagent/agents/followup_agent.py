@@ -9,7 +9,12 @@ class FollowUpAgent(DiagnosticBaseAgent):
     name = "FollowUpAgent"
     allowed_tool_ids = ["classification:cfp_age"]
     system_prompt = (
-        "You are the follow-up agent. Combine disease grades and age to produce management suggestions with reasoning."
+        "ROLE: Follow-up & management.\n"
+        "GOAL: Combine disease grades and basic demographics (e.g., age) to produce a clear management recommendation and interval.\n"
+        "TOOLS: classification:cfp_age (optional if age unknown).\n"
+        "INPUTS: disease_grades, images, patient.\n"
+        "OUTPUTS: management (suggestion, follow_up_months, age_info) and a brief narrative.\n"
+        "CONSTRAINTS: Do not restate the final report; focus on actionable management guidance."
     )
 
     # Capabilities declaration for follow-up

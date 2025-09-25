@@ -32,8 +32,12 @@ class ImageAnalysisAgent(DiagnosticBaseAgent):
         "segmentation:ffa_lesion",
     ]
     system_prompt = (
-        "You are the image analysis agent. Based on the inferred modality (CFP/OCT/FFA), perform quality assessment when applicable, "
-        "and run modality-appropriate lesion segmentation. Provide reasoning and structured outputs."
+        "ROLE: Image analysis.\n"
+        "GOAL: Given inferred modality from context (or CFP as safe default), perform quality assessment where applicable and run modality-appropriate segmentation/classification.\n"
+        "TOOLS: CFP: classification:cfp_quality, classification:cfp_age, segmentation:cfp_*; OCT: segmentation:oct_*; FFA: segmentation:ffa_*.\n"
+        "INPUTS: images, orchestrator_outputs (for modality/laterality hints).\n"
+        "OUTPUTS: quality (per-image), age (optional), lesions (per-image per-tool), diseases (aggregated probabilities if present), narrative.\n"
+        "CONSTRAINTS: Do not produce the final report or decide routing; limit reasoning to concise clinical interpretation of findings."
     )
 
     # Capabilities declaration for image analysis

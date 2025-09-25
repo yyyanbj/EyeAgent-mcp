@@ -21,15 +21,23 @@ uv sync
 uv run eyeagent-diagnose --patient '{"patient_id":"P001","age":63}' --images '[{"image_id":"IMG001","path":"/data/cfp1.jpg"}]'
 ```
 
-4) Or launch the UI (multi-agent via profile):
+4) Or launch the UI:
 ```bash
 uv run eyeagent-ui
+```
 
 To point the UI at a specific MCP server without setting a global env var, pass the flag:
 
 ```bash
 uv run eyeagent-ui --mcp-url http://localhost:8000/mcp/ --port 7860
 ```
+
+UI workflow backend selection:
+- Per-run: use the “Workflow Backend” dropdown in the Run Diagnosis tab (choices: langgraph | profile | interaction).
+- Session default: pass a startup flag so the whole UI uses a backend by default (still overridable per run by dropdown):
+
+```bash
+uv run eyeagent-ui --workflow-backend profile
 ```
 
 Outputs are written to cases/<case_id> by default (trace.json, final_report.json). Override with EYEAGENT_CASES_DIR or EYEAGENT_DATA_DIR.
@@ -62,7 +70,7 @@ Recommended multi-agent setup:
 
 ```
 workflow:
-  mode: profile
+  backend: profile
 ```
 
 2) Run the UI with the default profile:
@@ -86,6 +94,60 @@ Workflow mode precedence:
   - `EYEAGENT_UNIFIED=1` forces unified mode
   - `EYEAGENT_USE_LANGGRAPH=1` prefers LangGraph when available
 The config value takes precedence when present; env toggles will emit deprecation warnings.
+
+## Workflow backends (default: LangGraph)
+
+We provide multiple orchestration backends under `eyeagent/workflows/`:
+
+- LangGraph (default): `eyeagent/workflows/langgraph.py`
+  - Public API: `run_diagnosis_async`, `run_diagnosis`
+  - Default entry re-export: `eyeagent/diagnostic_workflow.py`
+- Profile-driven: `eyeagent/workflows/profile.py`
+  - Uses `eyeagent/config/pipelines.yml` to define a step list with optional conditions
+  - Public API: `run_diagnosis_async`, `run_diagnosis`
+  - Select profile with `EYEAGENT_PIPELINE_PROFILE` (default: `default`)
+- Spec/interaction-driven: `eyeagent/workflows/interaction.py`
+  - Accepts a custom spec (nodes/edges) or falls back to a simple orchestrator-led sequence
+  - Public API: `run_diagnosis_async`, `run_diagnosis`
+
+Example usage:
+
+```python
+# Default (LangGraph)
+from eyeagent.diagnostic_workflow import run_diagnosis_async
+
+# Profile
+from eyeagent.workflows.profile import run_diagnosis_async as run_profile
+
+# Interaction / custom spec
+from eyeagent.workflows.interaction import run_diagnosis_async as run_interaction
+
+final = await run_diagnosis_async(patient, images)
+final_profile = await run_profile(patient, images)
+final_interaction = await run_interaction(patient, images, spec={...})
+```
+
+To select backend globally without changing imports, set in `eyeagent/config/eyeagent.yml`:
+
+```yaml
+workflow:
+  backend: langgraph   # or: profile | interaction
+```
+
+Or via environment variable for the current process:
+
+```bash
+export EYEAGENT_WORKFLOW_BACKEND=profile
+```
+
+CLI one-off override (no config change):
+
+```bash
+uv run eyeagent-diagnose \
+  --workflow-backend profile \
+  --patient '{"patient_id":"P001","age":63}' \
+  --images '[{"image_id":"IMG001","path":"/data/cfp1.jpg"}]'
+```
 
 ## Development notes
 - CLI entrypoints:

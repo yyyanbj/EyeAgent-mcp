@@ -1,163 +1,185 @@
 from typing import Any, Dict, List
 from .base_agent import BaseAgent as DiagnosticBaseAgent
 from .registry import register_agent
-from fastmcp import Client
 from loguru import logger
-from ..config.tools_filter import filter_tool_ids
-from ..config.settings import get_specialist_selection_settings
+from ..config.settings import get_specialist_selection_settings, get_configured_agents
 from ..core.diagnosis_utils import get_candidate_diseases_from_probs
+from ..llm.json_client import JsonLLM
+from ..llm.models import RoutingDecision
 
 @register_agent
 class OrchestratorAgent(DiagnosticBaseAgent):
     role = "orchestrator"
     name = "OrchestratorAgent"
-    allowed_tool_ids = ["classification:modality", "classification:laterality", "classification:multidis"]
+    # Orchestrator no longer calls tools directly; it only routes
+    allowed_tool_ids: List[str] = []
     system_prompt = (
-        "You are the OrchestratorAgent for an ophthalmology diagnostic system. "
-        "Your tasks: (1) Infer imaging modality (CFP/OCT/FFA), (2) Classify laterality (OD/OS), (3) Plan the downstream diagnostic pipeline (ImageAnalysis, Specialist, FollowUp, Report). "
-        "For each step, provide detailed clinical reasoning and context. "
-        "When generating the final report, synthesize a comprehensive, patient-friendly ophthalmology summary that integrates all findings, including diagnoses, lesion details, management suggestions, and any uncertainties. "
-        "Highlight key findings, explain their significance, and ensure the summary is clear for both clinicians and patients."
+        "ROLE: Orchestrator/router. You never call tools.\n"
+        "GOAL: Decide the next agent to run based on current state and preliminary results, and provide a planned pipeline.\n"
+        "REQUIRED ORDER (when images exist): preliminary → image_analysis → specialist → (optional) knowledge → follow_up → report.\n"
+        "INPUTS: patient, images, and prior agent outputs (preliminary/image_analysis/specialist/knowledge/follow_up).\n"
+        "OUTPUTS: planned_pipeline (list of agent roles in intended order), next_agent (string).\n"
+        "HEURISTICS: If no images → go directly to report. If OCT modality → IA uses OCT tools. If screening confidence is very low, you may skip specialist.\n"
+        "CONSTRAINTS: Do not invoke tools; only route among available/enabled agents. When images exist, never jump to report before running preliminary and image_analysis unless they are explicitly disabled. Re-evaluate after each step and finish with report."
     )
 
-    # Capabilities declaration for orchestrator
     capabilities = {
-        "required_context": ["images", "patient"],
-        "expected_outputs": ["pipeline", "modality_results", "laterality_results"],
-        "retry_policy": {"max_attempts": 2, "on_fail": "skip"},
+        "required_context": ["patient", "images"],
+        "expected_outputs": ["planned_pipeline", "next_agent"],
+        "retry_policy": {"max_attempts": 1, "on_fail": "skip"},
         "modalities": ["CFP", "OCT", "FFA"],
-        "tools": allowed_tool_ids,
+        "tools": [],
     }
 
     async def a_run(self, context: Dict[str, Any]) -> Dict[str, Any]:
-        images = context.get("images", [])
-        task_desc = (
-            "Given raw images, first ensure each image has modality (CFP/OCT/FFA) and eye (OD/OS)."
-            " Then, based on modality, plan the pipeline (typically ImageAnalysis -> Specialist -> FollowUp -> Report)."
-            " Return JSON array plan of tools as needed."
+        images = context.get("images") or []
+        # Normalize images to list if an iterable-like is passed
+        if not isinstance(images, list):
+            try:
+                images = list(images)
+            except Exception:
+                images = []
+        try:
+            sample = []
+            for i in images[:3]:
+                if isinstance(i, dict):
+                    sample.append((i.get("image_id"), i.get("path")))
+                else:
+                    sample.append(str(i)[:120])
+            logger.debug(f"[orchestrator] images_type={type(images).__name__} images_count={len(images)} sample={sample}")
+        except Exception:
+            pass
+        # Gather state summary for LLM
+        prelim = context.get("preliminary") or (context.get("orchestrator_outputs") or {}).get("preliminary")
+        ia = context.get("image_analysis")
+        specialist = context.get("specialist")
+        knowledge = context.get("knowledge")
+        follow_up = context.get("follow_up")
+        configured = get_configured_agents()
+        known = ["preliminary", "image_analysis", "specialist", "knowledge", "follow_up", "report"]
+        if configured:
+            enabled_roles = {k for k, v in configured.items() if isinstance(v, dict) and (v.get("enabled") is not False)}
+            available = [r for r in known if r in enabled_roles or r == "report"]
+        else:
+            available = list(known)
+
+        def _summarize(d: Any, limit_keys: int = 12) -> str:
+            try:
+                import json as _json
+                if isinstance(d, dict):
+                    keys = list(d.keys())[:limit_keys]
+                    dd = {k: d.get(k) for k in keys}
+                    return _json.dumps(dd, ensure_ascii=False)
+                return _json.dumps(d, ensure_ascii=False)[:800]
+            except Exception:
+                return str(d)[:800]
+
+        completed = []
+        if prelim: completed.append("preliminary")
+        if ia: completed.append("image_analysis")
+        if specialist: completed.append("specialist")
+        if knowledge: completed.append("knowledge")
+        if follow_up: completed.append("follow_up")
+
+        sys = (
+            "You are the OrchestratorAgent (orchestrator). Route agents; do not call tools. "
+            "Return ONLY JSON following the exact schema. Rules: "
+            "- Allowed roles: ['preliminary','image_analysis','specialist','knowledge','follow_up','report']\n"
+            "- Always include 'report' at the END of planned_pipeline exactly once\n"
+            "- If images exist, do NOT jump to 'report' before 'preliminary' and 'image_analysis' unless they are disabled\n"
+            "- next_agent must be one of allowed roles and normally the first incomplete in planned_pipeline\n"
         )
-
-        # Apply config filter to allowed tools
-        filtered_allowed = filter_tool_ids(self.__class__.__name__, list(self.allowed_tool_ids))
-        plan = await self.plan_tools(task_desc, filtered_allowed)
-        if not plan:
-            # Fallback minimal plan if planner disabled: attempt modality and laterality
-            plan = [
-                {"tool_id": "classification:modality", "arguments": None, "reasoning": "Baseline modality classification."},
-                {"tool_id": "classification:laterality", "arguments": None, "reasoning": "Baseline laterality classification."},
-            ]
-
-        tool_calls = []
-        async with self._client_ctx() as client:
-            for req in plan:
-                tool_id = req.get("tool_id")
-                if tool_id not in filtered_allowed:
-                    continue
-                calls = await self.call_tool_per_image(client, tool_id, images, req.get("arguments") or {})
-                for c in calls:
-                    c["reasoning"] = req.get("reasoning")
-                tool_calls.extend(calls)
-
-        modality_results = [c for c in tool_calls if c["tool_id"] == "classification:modality"]
-        laterality_results = [c for c in tool_calls if c["tool_id"] == "classification:laterality"]
-
-        # Optionally call multidis for quick screening when modality is CFP (or unknown)
-        try:
-            modality_label = None
-            if modality_results:
-                out = (modality_results[0] or {}).get("output")
-                if isinstance(out, dict):
-                    modality_label = out.get("label") or out.get("prediction")
-            if (modality_label or "").upper() in ("", "CFP"):
-                async with self._client_ctx() as client:
-                    img_path = images[0].get("path") if images else None
-                    args = {"image_path": img_path} if img_path else {}
-                    tc = await self._call_tool(client, "classification:multidis", args)
-                    tc["reasoning"] = "Screen for multiple diseases at orchestration stage."
-                    tool_calls.append(tc)
-        except Exception:
-            pass
-
-        # Dynamic pipeline decision based on modality and screening confidences
-        planned_pipeline = ["image_analysis", "specialist", "knowledge", "follow_up", "report"]
-        screening_results = [c for c in tool_calls if c["tool_id"] == "classification:multidis"]
-        modality_label = None
-        try:
-            if modality_results:
-                mout = (modality_results[0] or {}).get("output")
-                if isinstance(mout, dict):
-                    modality_label = mout.get("label") or mout.get("prediction")
-        except Exception:
-            modality_label = None
-        # Parse screening confidences (assume dict of disease->prob)
-        top_dis = None
-        top_prob = 0.0
-        try:
-            if screening_results:
-                s_out = (screening_results[0] or {}).get("output")
-                probs = (s_out or {}).get("probabilities") if isinstance(s_out, dict) and isinstance((s_out or {}).get("probabilities"), dict) else s_out
-                cands = get_candidate_diseases_from_probs(probs, threshold=get_specialist_selection_settings()["candidate_threshold"], top_k=1)
-                if cands:
-                    top_dis = cands[0]
-                    # find its prob if available
-                    try:
-                        top_prob = float((probs or {}).get(top_dis, 0.0)) if isinstance(probs, dict) else 0.0
-                    except Exception:
-                        top_prob = 0.0
-        except Exception:
-            pass
-        # Heuristics:
-        # - If modality is OCT, skip CFP-specific follow_up possibly; still keep specialist/report
-        # - If screening confidence is very low (< 0.15), skip specialist to save time
-        # - If no images or bad quality likely, jump straight to report
+        user = (
+            f"Available roles (enabled): {available}\n"
+            f"Images count: {len(images) if isinstance(images, list) else 0}\n"
+            f"Completed steps: {completed}\n\n"
+            f"Context summary (preliminary): {_summarize(prelim)}\n"
+            f"Context summary (image_analysis): {_summarize(ia)}\n"
+            f"Context summary (specialist): {_summarize(specialist)}\n"
+            f"Context summary (knowledge): {_summarize(knowledge)}\n"
+            f"Context summary (follow_up): {_summarize(follow_up)}\n"
+        )
+        llm = JsonLLM(agent_name=self.__class__.__name__)
+        routing: RoutingDecision | None = None
         reasons: List[str] = []
-        if (modality_label or "").upper() == "OCT":
-            reasons.append("Modality is OCT; image_analysis will use OCT tools.")
-        if top_prob and top_prob < 0.15:
-            # remove specialist while keeping report
-            if "specialist" in planned_pipeline:
-                planned_pipeline.remove("specialist")
-                reasons.append(f"Screening low confidence ({top_prob:.2f}); skipping specialist.")
-            # If specialist is removed, knowledge may still be valuable; keep it
-        if not images:
-            planned_pipeline = ["report"]
-            reasons.append("No images provided; generating report from context only.")
-        reasoning = "; ".join(reasons) if reasons else "Planned standard pipeline based on modality and screening."
-        logger.info(f"[orchestrator] modality={modality_label} top_screen={top_dis}:{top_prob:.3f} pipeline={planned_pipeline}")
-        outputs = {
-            "modality_results": modality_results,
-            "laterality_results": laterality_results,
-            "planned_pipeline": planned_pipeline,
-            "screening_results": screening_results,
-        }
-
-        # Add a routing message for global conversation context
         try:
-            from ..diagnostic_workflow import _append_messages_from_result  # type: ignore
-            # Synthesize a small result to inform the global messages
-            _append_messages_from_result(context, {
-                "agent": self.name,
-                "role": self.role,
-                "outputs": {"planned_pipeline": planned_pipeline, "modality": modality_label, "top_screen": {"label": top_dis, "prob": top_prob}},
-                "tool_calls": [],
-                "reasoning": f"Routing via pipeline: {', '.join(planned_pipeline)}"
-            })
+            routing = llm.invoke_structured(sys, user, RoutingDecision)  # type: ignore[assignment]
         except Exception:
-            pass
+            # Fallback to plain JSON with explicit schema hint
+            try:
+                schema = (
+                    '{"planned_pipeline": ["preliminary","image_analysis","specialist","knowledge","follow_up","report"],' \
+                    '"next_agent": "...", "routing_reasons": ["..."]}'
+                )
+                data = llm.invoke_json(system_prompt=sys, user_prompt=user, schema_hint=schema)
+                routing = RoutingDecision(**data)  # type: ignore[arg-type]
+            except Exception as e:
+                reasons.append(f"LLM routing failed: {str(e)[:160]}")
+
+        # Validate and normalize LLM output; fallback to minimal valid plan if needed
+        planned_pipeline: List[str] = []
+        next_agent: str | None = None
+        if routing is not None:
+            planned_pipeline = [r for r in routing.planned_pipeline if r in known]
+            # Ensure report present exactly once and last
+            planned_pipeline = [x for x in planned_pipeline if x != "report"] + ["report"]
+            # Constrain to available (enabled) roles, but always keep final 'report'
+            planned_pipeline = [r for r in planned_pipeline if (r in available) or (r == "report")]
+            next_agent = routing.next_agent if routing.next_agent in planned_pipeline else None
+            if routing.routing_reasons:
+                reasons.extend(list(routing.routing_reasons)[:4])
+
+        # Hard guard: if images exist and prelim/IA are enabled+in plan, they must come first if incomplete
+        if images and planned_pipeline:
+            for must in ("preliminary", "image_analysis"):
+                if must in planned_pipeline and must not in completed:
+                    next_agent = must
+                    break
+
+        # Minimal fallback if still invalid
+        if not planned_pipeline:
+            planned_pipeline = [r for r in available if r in known]
+            if "report" not in planned_pipeline:
+                planned_pipeline.append("report")
+        if not next_agent:
+            for step in planned_pipeline:
+                if step not in completed:
+                    next_agent = step
+                    break
+        if not next_agent:
+            next_agent = "report"
+
+        # Final safety: never route to a step that's already completed; advance to first incomplete
+        if next_agent in completed:
+            picked = None
+            for step in planned_pipeline:
+                if step not in completed:
+                    picked = step
+                    break
+            next_agent = picked or "report"
+
+        outputs = {
+            "planned_pipeline": planned_pipeline,
+            "next_agent": next_agent,
+            "available_agents": available,
+            "routing_reasons": reasons,
+            "images_count": (len(images) if isinstance(images, list) else 0),
+        }
+        reasoning = "; ".join(reasons) if reasons else f"Next agent: {next_agent} (LLM-guided)"
 
         self.trace_logger.append_event(self.case_id, {
             "type": "agent_step",
             "agent": self.name,
             "role": self.role,
             "outputs": outputs,
-            "tool_calls": tool_calls,
-            "reasoning": reasoning
+            "tool_calls": [],
+            "reasoning": reasoning,
         })
 
         return {
             "agent": self.name,
             "role": self.role,
             "outputs": outputs,
-            "tool_calls": tool_calls,
-            "reasoning": reasoning
+            "tool_calls": [],
+            "reasoning": reasoning,
         }

@@ -242,49 +242,50 @@ TOOL_REGISTRY: Dict[str, Dict[str, Any]] = {
         "version": "1.0.0",
         "role": "specialist",
         "desc": f"Disease-specific grading/classification: {tid.split(':')[-1]}",
+        "args_schema": {"type": "object", "properties": {"image_path": {"type": "string"}}, "required": ["image_path"]},
         "desc_long": "Per-disease fine-tuned model for grading or diagnosis."
     } for tid in [
-        "disease_specific_cls:AH_finetune",
-        "disease_specific_cls:AION_finetune",
-        "disease_specific_cls:AMD_finetune",
-        "disease_specific_cls:CM_finetune",
-        "disease_specific_cls:CNV_finetune",
-        "disease_specific_cls:CSCR_finetune",
-        "disease_specific_cls:Coats_finetune",
-        "disease_specific_cls:DR_finetune",
-        "disease_specific_cls:ERM_finetune",
-        "disease_specific_cls:HR_finetune",
-        "disease_specific_cls:MGS_finetune",
-        "disease_specific_cls:MH_finetune",
-        "disease_specific_cls:PCV_finetune",
-        "disease_specific_cls:RAO_finetune",
-        "disease_specific_cls:RD_finetune",
-        "disease_specific_cls:ROP_finetune",
-        "disease_specific_cls:RP_finetune",
-        "disease_specific_cls:RVO_finetune",
-        "disease_specific_cls:VHL_finetune",
-        "disease_specific_cls:VKH_finetune",
-        "disease_specific_cls:WDS_finetune",
-        "disease_specific_cls:corneal_ulcer_finetune",
-        "disease_specific_cls:epiphora_finetune",
-        "disease_specific_cls:glaucoma_finetune",
-        "disease_specific_cls:keratoconus_finetune",
-        "disease_specific_cls:macular_dystrophy_finetune",
-        "disease_specific_cls:metaPM_finetune",
-        "disease_specific_cls:nuclear_cataract_1_finetune",
-        "disease_specific_cls:nuclear_cataract_2_finetune",
-        "disease_specific_cls:nuclear_cataract_3_finetune",
-        "disease_specific_cls:nuclear_cataract_4_finetune",
-        "disease_specific_cls:nuclear_cataract_finetune",
-        "disease_specific_cls:opaque_cornea_finetune",
-        "disease_specific_cls:retinoschisis_finetune",
-        "disease_specific_cls:toxoplasmosis_finetune",
-        "disease_specific_cls:viral_retinitis_finetune",
+        "disease_specific_cls:AH",
+        "disease_specific_cls:AION",
+        "disease_specific_cls:AMD",
+        "disease_specific_cls:CM",
+        "disease_specific_cls:CNV",
+        "disease_specific_cls:CSCR",
+        "disease_specific_cls:Coats",
+        "disease_specific_cls:DR",
+        "disease_specific_cls:ERM",
+        "disease_specific_cls:HR",
+        "disease_specific_cls:MGS",
+        "disease_specific_cls:MH",
+        "disease_specific_cls:PCV",
+        "disease_specific_cls:RAO",
+        "disease_specific_cls:RD",
+        "disease_specific_cls:ROP",
+        "disease_specific_cls:RP",
+        "disease_specific_cls:RVO",
+        "disease_specific_cls:VHL",
+        "disease_specific_cls:VKH",
+        "disease_specific_cls:WDS",
+        "disease_specific_cls:corneal_ulcer",
+        "disease_specific_cls:epiphora",
+        "disease_specific_cls:glaucoma",
+        "disease_specific_cls:keratoconus",
+        "disease_specific_cls:macular_dystrophy",
+        "disease_specific_cls:metaPM",
+        # "disease_specific_cls:nuclear_cataract_1",
+        # "disease_specific_cls:nuclear_cataract_2",
+        # "disease_specific_cls:nuclear_cataract_3",
+        # "disease_specific_cls:nuclear_cataract_4",
+        "disease_specific_cls:nuclear_cataract",
+        "disease_specific_cls:opaque_cornea",
+        "disease_specific_cls:retinoschisis",
+        "disease_specific_cls:toxoplasmosis",
+        "disease_specific_cls:viral_retinitis",
     ]}
 }
 
 # Basic disease name/abbreviation mapping to enrich disease_specific results.
-# Keys are upper tokens (normalized) without suffixes like _FINETUNE or numeric tails.
+# Keys are upper tokens (normalized) without suffixes like  or numeric tails.
 _DISEASE_NAME_MAP: Dict[str, Tuple[str, str]] = {
     "DR": ("Diabetic Retinopathy", "DR"),
     "AMD": ("Age-related Macular Degeneration", "AMD"),
@@ -315,14 +316,14 @@ def disease_names_for_tool(tool_id: str) -> Dict[str, str]:
     """Return {'full': ..., 'abbr': ...} derived from a disease_specific tool_id.
 
     Heuristics:
-    - Parse token after 'disease_specific_cls:' and before optional suffix like '_finetune'
+    - Parse token after 'disease_specific_cls:' and before optional suffix like ''
     - Try uppercase map; fallback to humanized full name and acronym abbreviation.
     """
     try:
         if not isinstance(tool_id, str) or not tool_id.startswith("disease_specific_cls:"):
             return {}
         token = tool_id.split(":", 1)[1]
-        token = token.rsplit("_finetune", 1)[0]
+        token = token.rsplit("", 1)[0]
         # Remove trailing _<digit> variants (e.g., nuclear_cataract_4)
         import re
         token = re.sub(r"_\d+$", "", token)
@@ -467,55 +468,55 @@ def role_tool_ids(role: str) -> List[str]:
 # ---- Enhanced resolver: map common disease names/keywords to tool ids --------
 _DISEASE_KEYWORD_TO_TOOLID = {
     # DR / Diabetic Retinopathy
-    "dr": "disease_specific_cls:DR_finetune",
-    "diabetic retinopathy": "disease_specific_cls:DR_finetune",
+    "dr": "disease_specific_cls:DR",
+    "diabetic retinopathy": "disease_specific_cls:DR",
     # AMD
-    "amd": "disease_specific_cls:AMD_finetune",
-    "age-related macular degeneration": "disease_specific_cls:AMD_finetune",
+    "amd": "disease_specific_cls:AMD",
+    "age-related macular degeneration": "disease_specific_cls:AMD",
     # CNV / PCV
-    "cnv": "disease_specific_cls:CNV_finetune",
-    "pcv": "disease_specific_cls:PCV_finetune",
+    "cnv": "disease_specific_cls:CNV",
+    "pcv": "disease_specific_cls:PCV",
     # Glaucoma
-    "glaucoma": "disease_specific_cls:glaucoma_finetune",
+    "glaucoma": "disease_specific_cls:glaucoma",
     # Macular hole
-    "mh": "disease_specific_cls:MH_finetune",
-    "macular hole": "disease_specific_cls:MH_finetune",
+    "mh": "disease_specific_cls:MH",
+    "macular hole": "disease_specific_cls:MH",
     # Retinal detachment
-    "rd": "disease_specific_cls:RD_finetune",
-    "retinal detachment": "disease_specific_cls:RD_finetune",
+    "rd": "disease_specific_cls:RD",
+    "retinal detachment": "disease_specific_cls:RD",
     # Vein/artery occlusions
-    "rvo": "disease_specific_cls:RVO_finetune",
-    "rao": "disease_specific_cls:RAO_finetune",
+    "rvo": "disease_specific_cls:RVO",
+    "rao": "disease_specific_cls:RAO",
     # ERM
-    "erm": "disease_specific_cls:ERM_finetune",
-    "epiretinal membrane": "disease_specific_cls:ERM_finetune",
+    "erm": "disease_specific_cls:ERM",
+    "epiretinal membrane": "disease_specific_cls:ERM",
     # Inflammations / syndromes
-    "vkh": "disease_specific_cls:VKH_finetune",
-    "vhl": "disease_specific_cls:VHL_finetune",
-    "aion": "disease_specific_cls:AION_finetune",
-    "coats": "disease_specific_cls:Coats_finetune",
-    "cscr": "disease_specific_cls:CSCR_finetune",
-    "central serous": "disease_specific_cls:CSCR_finetune",
+    "vkh": "disease_specific_cls:VKH",
+    "vhl": "disease_specific_cls:VHL",
+    "aion": "disease_specific_cls:AION",
+    "coats": "disease_specific_cls:Coats",
+    "cscr": "disease_specific_cls:CSCR",
+    "central serous": "disease_specific_cls:CSCR",
     # Infectious / degenerative
-    "toxoplasmosis": "disease_specific_cls:toxoplasmosis_finetune",
-    "viral retinitis": "disease_specific_cls:viral_retinitis_finetune",
+    "toxoplasmosis": "disease_specific_cls:toxoplasmosis",
+    "viral retinitis": "disease_specific_cls:viral_retinitis",
     # Others
-    "retinoschisis": "disease_specific_cls:retinoschisis_finetune",
-    "rp": "disease_specific_cls:RP_finetune",
-    "retinitis pigmentosa": "disease_specific_cls:RP_finetune",
-    "rop": "disease_specific_cls:ROP_finetune",
-    "keratoconus": "disease_specific_cls:keratoconus_finetune",
-    "macular dystrophy": "disease_specific_cls:macular_dystrophy_finetune",
-    "metapm": "disease_specific_cls:metaPM_finetune",
-    "pathologic myopia": "disease_specific_cls:metaPM_finetune",
-    "cataract": "disease_specific_cls:nuclear_cataract_finetune",
-    "nuclear cataract": "disease_specific_cls:nuclear_cataract_finetune",
-    "corneal ulcer": "disease_specific_cls:corneal_ulcer_finetune",
-    "epiphora": "disease_specific_cls:epiphora_finetune",
+    "retinoschisis": "disease_specific_cls:retinoschisis",
+    "rp": "disease_specific_cls:RP",
+    "retinitis pigmentosa": "disease_specific_cls:RP",
+    "rop": "disease_specific_cls:ROP",
+    "keratoconus": "disease_specific_cls:keratoconus",
+    "macular dystrophy": "disease_specific_cls:macular_dystrophy",
+    "metapm": "disease_specific_cls:metaPM",
+    "pathologic myopia": "disease_specific_cls:metaPM",
+    "cataract": "disease_specific_cls:nuclear_cataract",
+    "nuclear cataract": "disease_specific_cls:nuclear_cataract",
+    "corneal ulcer": "disease_specific_cls:corneal_ulcer",
+    "epiphora": "disease_specific_cls:epiphora",
     # Less common abbreviations from registry
-    "mgs": "disease_specific_cls:MGS_finetune",
-    "ah": "disease_specific_cls:AH_finetune",
-    "hr": "disease_specific_cls:HR_finetune",
+    "mgs": "disease_specific_cls:MGS",
+    "ah": "disease_specific_cls:AH",
+    "hr": "disease_specific_cls:HR",
 }
 
 def resolve_specialist_tools(diseases: List[str]) -> List[Dict[str, Any]]:
