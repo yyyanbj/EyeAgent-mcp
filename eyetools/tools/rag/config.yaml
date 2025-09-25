@@ -7,9 +7,11 @@ shared:
   runtime:
     # Run in subprocess so the tool executes under the uv-managed env
     load_mode: subprocess
-    idle_timeout_s: 600
+    # Keep worker alive effectively indefinitely (server-wide lifecycle already prevents unload)
+    idle_timeout_s: 99999999
     device_policy: auto
-    preload: false
+    # Hint to server that this tool can be preloaded; with eager mode it will be spawned on boot
+    preload: true
   io:
     input_schema:
       query: string

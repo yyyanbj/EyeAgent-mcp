@@ -151,9 +151,11 @@ def create_app(
     role_config_path: Optional[str] = None,
     preload: bool = False,
     preload_subprocess: bool = False,
-    lifecycle_mode: Optional[str] = None,
-    dynamic_mark_idle_s: float = 300.0,
-    dynamic_unload_s: float = 900.0,
+    # Default lifecycle to eager to load all tools at startup as requested
+    lifecycle_mode: Optional[str] = "eager",
+    # Set large thresholds to effectively avoid IDLE and UNLOAD transitions unless explicitly called
+    dynamic_mark_idle_s: float = 365*24*3600,
+    dynamic_unload_s: float = 365*24*3600,
     dynamic_interval_s: float = 60.0,
     parallel_subprocess: bool = False,
     parallel_subprocess_workers: int = 4,
@@ -618,6 +620,15 @@ def create_app(
                 parallel_subprocess=parallel_subprocess,
                 max_workers=parallel_subprocess_workers,
             )  # eager always includes subprocess
+            # Additionally, perform warmup for RAG so qdrant ingestion happens at startup.
+            # Can be disabled via EYETOOLS_WARMUP_ON_BOOT=0 if needed.
+            if os.getenv("EYETOOLS_WARMUP_ON_BOOT", "1") != "0":
+                try:
+                    # Warm up only the rag:query tool to avoid heavy startup for unrelated tools
+                    r = tm.warmup_tool("rag:query")
+                    core_logger.info("[lifecycle] eager warmup rag: %s", r)
+                except Exception as e:  # noqa
+                    core_logger.warning("[lifecycle] eager rag warmup failed: %s", e)
         elif lifecycle_mode == "lazy":
             core_logger.info("[lifecycle] lazy mode: models load on first request")
             # nothing extra
