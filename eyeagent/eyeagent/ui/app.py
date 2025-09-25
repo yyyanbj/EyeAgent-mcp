@@ -2,6 +2,7 @@ import os
 import json
 import asyncio
 import argparse
+from datetime import datetime
 from pathlib import Path
 from typing import List, Dict, Any, Tuple, Optional, AsyncGenerator
 import html
@@ -914,7 +915,26 @@ def build_interface() -> gr.Blocks:
             refresh_btn = gr.Button("Refresh Case List")
             # Pre-populate initial case choices at build time
             try:
-                _initial_cases = [d.name for d in Path(str(_find_cases_dir())).iterdir() if d.is_dir()]
+                def _case_time_key(p: Path) -> float:
+                    try:
+                        tpath = p / "trace.json"
+                        if tpath.exists():
+                            with open(tpath, "r", encoding="utf-8") as f:
+                                doc = json.load(f)
+                            ca = doc.get("created_at") or doc.get("updated_at")
+                            if isinstance(ca, str):
+                                try:
+                                    return datetime.fromisoformat(ca).timestamp()
+                                except Exception:
+                                    pass
+                    except Exception:
+                        pass
+                    try:
+                        return p.stat().st_mtime
+                    except Exception:
+                        return 0.0
+
+                _initial_cases = [d.name for d in sorted((Path(str(_find_cases_dir())).iterdir() if Path(str(_find_cases_dir())).exists() else []), key=_case_time_key) if d.is_dir()]
             except Exception:
                 _initial_cases = []
             case_list = gr.Dropdown(label="Select Case", choices=_initial_cases, interactive=True)
@@ -930,7 +950,25 @@ def build_interface() -> gr.Blocks:
                 p = Path(dir_path)
                 if not p.exists():
                     return []
-                return [d.name for d in p.iterdir() if d.is_dir()]
+                def _case_time_key(pth: Path) -> float:
+                    try:
+                        tpath = pth / "trace.json"
+                        if tpath.exists():
+                            with open(tpath, "r", encoding="utf-8") as f:
+                                doc = json.load(f)
+                            ca = doc.get("created_at") or doc.get("updated_at")
+                            if isinstance(ca, str):
+                                try:
+                                    return datetime.fromisoformat(ca).timestamp()
+                                except Exception:
+                                    pass
+                    except Exception:
+                        pass
+                    try:
+                        return pth.stat().st_mtime
+                    except Exception:
+                        return 0.0
+                return [d.name for d in sorted([d for d in p.iterdir() if d.is_dir()], key=_case_time_key)]
 
             def do_refresh(dir_path: str):
                 return gr.update(choices=list_cases(dir_path))
@@ -1036,8 +1074,33 @@ def build_interface() -> gr.Blocks:
             load_td_btn.click(load_local_td, inputs=[cfg_dir], outputs=[local_td_json])
             sync_btn.click(do_sync, inputs=[cfg_dir], outputs=[sync_status, local_td_json])
 
-        # Auto-populate recently cases list on app load
-        demo.load(lambda p: gr.update(choices=[d.name for d in Path(p).iterdir() if d.is_dir()] if Path(p).exists() else []), inputs=[cases_dir], outputs=[case_list])
+        # Auto-populate cases list on app load (chronological order)
+        def _auto_list_cases(p: str):
+            base = Path(p)
+            if not base.exists():
+                return gr.update(choices=[])
+            def _case_time_key(pth: Path) -> float:
+                try:
+                    tpath = pth / "trace.json"
+                    if tpath.exists():
+                        with open(tpath, "r", encoding="utf-8") as f:
+                            doc = json.load(f)
+                        ca = doc.get("created_at") or doc.get("updated_at")
+                        if isinstance(ca, str):
+                            try:
+                                return datetime.fromisoformat(ca).timestamp()
+                            except Exception:
+                                pass
+                except Exception:
+                    pass
+                try:
+                    return pth.stat().st_mtime
+                except Exception:
+                    return 0.0
+            choices = [d.name for d in sorted([d for d in base.iterdir() if d.is_dir()], key=_case_time_key)]
+            return gr.update(choices=choices)
+
+        demo.load(_auto_list_cases, inputs=[cases_dir], outputs=[case_list])
 
     return demo
 
