@@ -18,6 +18,7 @@ from ..metrics.metrics import tool_timer, add_tokens
 from ..tools.tool_registry import get_tool
 from ..config.prompts import PromptsConfig
 from ..config.settings import build_chat_model, get_llm_config
+from ..config.settings import get_knowledge_config
 from ..llm.json_client import JsonLLM
 from ..llm.models import ToolPlan, ReasoningOut
 from ..tools.langchain_mcp_tools import build_langchain_mcp_tools, load_tools_from_mcp
@@ -67,6 +68,15 @@ class BaseAgent:
                 self.system_prompt = sp
         except Exception:
             pass
+        # Knowledge usage config
+        self._knowledge_calls = 0
+        try:
+            kn = get_knowledge_config()
+            self._knowledge_top_k_default = int(kn.get("default_top_k", 3))
+            self._knowledge_max_calls = int(kn.get("max_calls_per_agent", 2))
+        except Exception:
+            self._knowledge_top_k_default = 3
+            self._knowledge_max_calls = 2
 
     def _dry_run(self) -> bool:
         return os.getenv("EYEAGENT_DRY_RUN", "0").lower() in ("1", "true", "yes")
@@ -316,6 +326,36 @@ class BaseAgent:
             except Exception:
                 pass
             return context_summary
+
+    # ---- knowledge helpers -------------------------------------------------
+    def _apply_knowledge_defaults(self, tool_id: str, args: Dict[str, Any] | None) -> Dict[str, Any]:
+        a = dict(args or {})
+        try:
+            if isinstance(tool_id, str) and (tool_id.startswith("rag:query") or tool_id.startswith("web_search:")):
+                a.setdefault("top_k", self._knowledge_top_k_default)
+        except Exception:
+            pass
+        return a
+
+    def _knowledge_allowed(self) -> bool:
+        try:
+            return self._knowledge_calls < max(0, int(self._knowledge_max_calls))
+        except Exception:
+            return True
+
+    def _note_knowledge_called(self) -> None:
+        try:
+            self._knowledge_calls += 1
+        except Exception:
+            pass
+
+    @staticmethod
+    def _normalize_knowledge_output(out: Any) -> Dict[str, Any] | None:
+        if isinstance(out, dict):
+            return out
+        if isinstance(out, list):
+            return {"items": out}
+        return None
 
     # ---- LLM bound-tools runtime -------------------------------------------
     async def run_with_bound_tools(self,

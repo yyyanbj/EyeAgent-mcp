@@ -28,6 +28,13 @@ DEFAULT_SETTINGS: Dict[str, Any] = {
             "candidate_top_k": int(os.getenv("EYEAGENT_CANDIDATE_TOPK", "5")),
         },
     },
+    # Defaults for knowledge tool usage across agents
+    "knowledge": {
+        # default top_k when query args omit it
+        "default_top_k": int(os.getenv("EYEAGENT_KNOWLEDGE_TOPK", "3")),
+        # max number of knowledge tool calls per agent per run
+        "max_calls_per_agent": int(os.getenv("EYEAGENT_KNOWLEDGE_MAX_CALLS", "2")),
+    },
     # Agents map: role -> dotted class path; enabled flag allows pruning
     "agents": {
         "unified": {
@@ -50,6 +57,10 @@ DEFAULT_SETTINGS: Dict[str, Any] = {
             "class": "eyeagent.agents.specialist_agent.SpecialistAgent",
             "enabled": True,
         },
+        "decision": {
+            "class": "eyeagent.agents.decision_agent.DecisionAgent",
+            "enabled": True,
+        },
         "follow_up": {
             "class": "eyeagent.agents.followup_agent.FollowUpAgent",
             "enabled": True,
@@ -69,17 +80,23 @@ DEFAULT_SETTINGS: Dict[str, Any] = {
             "include": ["classification:(modality|laterality|multidis)"]
         },
         "ImageAnalysisAgent": {
-            "include": ["classification:cfp_quality", "segmentation:cfp_.*", "segmentation:oct_.*", "segmentation:ffa_.*"]
+            "include": ["classification:cfp_quality", "segmentation:cfp_.*", "segmentation:oct_.*", "segmentation:ffa_.*", "rag:query", "web_search:.*"]
         },
         "SpecialistAgent": {
-            "include": ["disease_specific_cls:.*"]
+            "include": ["disease_specific_cls:.*", "rag:query", "web_search:.*"]
         },
         "FollowUpAgent": {
-            "include": ["classification:cfp_age"]
+            "include": ["classification:cfp_age", "rag:query", "web_search:.*"]
         },
         "KnowledgeAgent": {
             "include": ["rag:query", "web_search:.*"]
-        }
+        },
+        "PreliminaryAgent": {
+            "include": ["classification:modality", "classification:laterality", "classification:multidis", "rag:query", "web_search:.*"]
+        },
+        "DecisionAgent": {
+            "include": ["rag:query", "web_search:.*"]
+        },
     },
 }
 
@@ -207,4 +224,14 @@ def get_configured_agents() -> Dict[str, Dict[str, Any]]:
     for k, v in agents.items():
         if isinstance(v, dict):
             out[k] = v
+    return out
+
+
+def get_knowledge_config() -> Dict[str, Any]:
+    cfg = Settings().load()
+    kn = cfg.get("knowledge") or {}
+    out = {
+        "default_top_k": int(kn.get("default_top_k", 3) or 3),
+        "max_calls_per_agent": int(kn.get("max_calls_per_agent", 2) or 2),
+    }
     return out

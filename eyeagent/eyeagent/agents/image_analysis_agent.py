@@ -2,7 +2,7 @@ from typing import Any, Dict, List
 from .base_agent import BaseAgent as DiagnosticBaseAgent
 from .registry import register_agent
 from fastmcp import Client
-from ..config.tools_filter import filter_tool_ids
+from ..config.tools_filter import filter_tool_ids, select_tool_ids
 
 @register_agent
 class ImageAnalysisAgent(DiagnosticBaseAgent):
@@ -30,6 +30,10 @@ class ImageAnalysisAgent(DiagnosticBaseAgent):
         "segmentation:oct_lesion",
         # FFA
         "segmentation:ffa_lesion",
+        # optional knowledge tools
+        "rag:query",
+        "web_search:pubmed",
+        "web_search:tavily",
     ]
     system_prompt = (
         "ROLE: Image analysis.\n"
@@ -69,7 +73,8 @@ class ImageAnalysisAgent(DiagnosticBaseAgent):
                 modality = None
 
         task_desc = "Perform modality-appropriate analysis (quality if applicable, segmentation)."
-        allowed = filter_tool_ids(self.__class__.__name__, list(self.allowed_tool_ids))
+        # Config-first: derive allowed tools from config; fallback to base list
+        allowed = select_tool_ids(self.__class__.__name__, base_tool_ids=self.allowed_tool_ids, role=self.role)
         plan = await self.plan_tools(task_desc, allowed)
         if not plan:
             plan = []
@@ -99,6 +104,12 @@ class ImageAnalysisAgent(DiagnosticBaseAgent):
                     c["reasoning"] = step.get("reasoning")
                 tool_calls.extend(calls)
 
+            # Optional: small knowledge query based on top diseases or lesions summary
+            kn_allowed = select_tool_ids(self.__class__.__name__, base_tool_ids=["rag:query", "web_search:pubmed", "web_search:tavily"], role=self.role)
+            if kn_allowed:
+                # Build a query later using aggregated outputs below; here we just reserve a placeholder
+                pass
+
         # Aggregate outputs (simplified)
         # Aggregate per-image
         quality = {}
@@ -119,7 +130,7 @@ class ImageAnalysisAgent(DiagnosticBaseAgent):
                 lesions.setdefault(img_id, {})[tid] = out
             if tid == "classification:multidis":
                 diseases[img_id] = out
-        # Build a narrative summary
+    # Build a narrative summary
         def _fmt_prob(p):
             try:
                 return f"{float(p)*100:.1f}%"
@@ -172,6 +183,27 @@ class ImageAnalysisAgent(DiagnosticBaseAgent):
             parts.append(f"Top disease likelihoods: {top_d_txt}.")
         base_summary = " ".join(parts).strip()
         reasoning = self.gen_reasoning(base_summary)
+        # Optional knowledge fetch leveraging base_summary as a query
+        knowledge_blocks: List[Dict[str, Any]] = []
+        kn_allowed2 = select_tool_ids(self.__class__.__name__, base_tool_ids=["rag:query", "web_search:pubmed", "web_search:tavily"], role=self.role)
+        knowledge_query = (top_d_txt or lesion_txt) if (top_d_txt or lesion_txt) else None
+        if kn_allowed2 and knowledge_query:
+            plan2 = await self.plan_tools(f"If needed, fetch brief knowledge for: {knowledge_query}", kn_allowed2)
+            async with self._client_ctx() as client:
+                for step in (plan2 or []):
+                    tid = step.get("tool_id")
+                    if tid not in kn_allowed2:
+                        continue
+                    if not self._knowledge_allowed():
+                        break
+                    args = self._apply_knowledge_defaults(tid, step.get("arguments"))
+                    tc = await self._call_tool(client, tid, args)
+                    self._note_knowledge_called()
+                    tc["reasoning"] = step.get("reasoning")
+                    tool_calls.append(tc)
+                    out = tc.get("output")
+                    if isinstance(out, dict):
+                        knowledge_blocks.append(out)
         # Merge diseases across images into a single dict (max probability per disease) for backward compatibility
         merged_diseases: Dict[str, Any] = {}
         if isinstance(diseases, dict):
@@ -190,6 +222,7 @@ class ImageAnalysisAgent(DiagnosticBaseAgent):
             "diseases": merged_diseases or diseases,
             "per_image": {"quality": quality, "age": ages, "lesions": lesions, "diseases": diseases},
             "narrative": reasoning,
+            "knowledge": {"query": knowledge_query, "items": knowledge_blocks} if knowledge_blocks else None,
         }
 
         self.trace_logger.append_event(self.case_id, {

@@ -55,6 +55,7 @@ class WorkflowState(TypedDict, total=False):
     image_analysis: Dict[str, Any]
     specialist: Dict[str, Any]
     knowledge: Dict[str, Any]
+    decision: Dict[str, Any]
     follow_up: Dict[str, Any]
     final_fragment: Dict[str, Any]
     # Derived
@@ -384,6 +385,38 @@ async def node_specialist(state: WorkflowState) -> WorkflowState:
     return state
 
 
+async def node_decision(state: WorkflowState) -> WorkflowState:
+    logger.debug("[workflow] enter node_decision")
+    trace = state.get("trace") or TraceLogger()
+    state["trace"] = trace
+    case_id = state.get("case_id") or trace.create_case(patient=state.get("patient", {}), images=state.get("images", []))
+    state["case_id"] = case_id
+    cls = get_agent_class("decision")
+    if not cls:
+        logger.warning("[workflow] DecisionAgent not configured; skipping")
+        return state
+    agent = cls(MCP_SERVER_URL, trace, case_id)  # type: ignore[call-arg]
+    context = dict(state)
+    context["messages"] = state.get("messages", [])
+    if "orchestrator_outputs" in state:
+        context["orchestrator_outputs"] = state["orchestrator_outputs"]
+    if "image_analysis" in state:
+        context["image_analysis"] = state["image_analysis"]
+    if "specialist" in state:
+        context["specialist"] = state["specialist"]
+    with step_timer(agent.__class__.__name__, agent.role):
+        res = await agent.a_run(context)
+    state.setdefault("workflow", []).append(res)
+    _append_messages_from_result(state, res)
+    state["decision"] = res.get("outputs")
+    cs = state.setdefault("completed_steps", [])
+    if "decision" not in cs:
+        cs.append("decision")
+    state["last_agent"] = "decision"
+    logger.debug("[workflow] exit node_decision")
+    return state
+
+
 async def node_knowledge(state: WorkflowState) -> WorkflowState:
     logger.debug("[workflow] enter node_knowledge")
     trace = state.get("trace") or TraceLogger()
@@ -434,6 +467,8 @@ async def node_followup(state: WorkflowState) -> WorkflowState:
         context["orchestrator_outputs"] = state["orchestrator_outputs"]
     if "specialist" in state:
         context["specialist"] = state["specialist"]
+    if "decision" in state:
+        context["decision"] = state["decision"]
     with step_timer(agent.__class__.__name__, agent.role):
         res = await agent.a_run(context)
     state.setdefault("workflow", []).append(res)
@@ -470,6 +505,8 @@ async def node_report(state: WorkflowState) -> WorkflowState:
         context["specialist"] = state["specialist"]
     if "knowledge" in state:
         context["knowledge"] = state["knowledge"]
+    if "decision" in state:
+        context["decision"] = state["decision"]
     if "follow_up" in state:
         context["follow_up"] = state["follow_up"]
     with step_timer(agent.__class__.__name__, agent.role):
@@ -490,6 +527,7 @@ def compile_graph():
     g.add_node("image_analysis", node_image_analysis)
     g.add_node("specialist", node_specialist)
     g.add_node("knowledge", node_knowledge)
+    g.add_node("decision", node_decision)
     g.add_node("follow_up", node_followup)
     g.add_node("report", node_report)
 
@@ -497,7 +535,7 @@ def compile_graph():
 
     def route_next(state: WorkflowState):
         nxt = state.get("next_agent")
-        if nxt in ("preliminary", "image_analysis", "specialist", "knowledge", "follow_up", "report"):
+        if nxt in ("preliminary", "image_analysis", "specialist", "knowledge", "decision", "follow_up", "report"):
             return nxt
         return "report"
 
@@ -509,12 +547,13 @@ def compile_graph():
             "image_analysis": "image_analysis",
             "specialist": "specialist",
             "knowledge": "knowledge",
+            "decision": "decision",
             "follow_up": "follow_up",
             "report": "report",
         },
     )
 
-    for worker in ("preliminary", "image_analysis", "specialist", "knowledge", "follow_up"):
+    for worker in ("preliminary", "image_analysis", "specialist", "knowledge", "decision", "follow_up"):
         g.add_edge(worker, "orchestrator")
 
     g.add_edge("report", END)

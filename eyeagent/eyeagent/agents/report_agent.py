@@ -30,6 +30,24 @@ class ReportAgent(DiagnosticBaseAgent):
         specialist = context.get("specialist") or {}
         follow_up = context.get("follow_up") or {}
         knowledge = context.get("knowledge") or {}
+        # Aggregate knowledge from upstream agents when available
+        prelim_kn = (context.get("preliminary") or {}).get("knowledge")
+        ia_kn = (context.get("image_analysis") or {}).get("knowledge")
+        sp_kn = (context.get("specialist") or {}).get("knowledge")
+        dec_kn = (context.get("decision") or {}).get("knowledge")
+        fu_kn = (context.get("follow_up") or {}).get("management", {}).get("knowledge")
+        kn_items: List[Dict[str, Any]] = []
+        kn_queries: List[str] = []
+        for kn in [prelim_kn, ia_kn, sp_kn, dec_kn, fu_kn]:
+            if isinstance(kn, dict):
+                q = kn.get("query")
+                if isinstance(q, str) and q and q not in kn_queries:
+                    kn_queries.append(q)
+                items = kn.get("items")
+                if isinstance(items, list):
+                    for it in items:
+                        if isinstance(it, dict):
+                            kn_items.append(it)
 
         # Prefer per-image specialist grading if available
         per_sp = (specialist.get("per_image") or {}).get("disease_grades") or {}
@@ -88,6 +106,13 @@ class ReportAgent(DiagnosticBaseAgent):
             conclusion = diag_txt
         elif mgmt_txt:
             conclusion = mgmt_txt
+        # Build a concise knowledge evidence summary
+        knowledge_agg = None
+        if kn_items:
+            # Limit to a few top items if many
+            sample_items = kn_items[:5]
+            knowledge_agg = {"queries": kn_queries or None, "items": sample_items}
+
         outputs = {
             "diagnoses": diagnoses,
             "lesions": lesions,
@@ -100,7 +125,7 @@ class ReportAgent(DiagnosticBaseAgent):
                 "lesions": lesions if isinstance(lesions, dict) else None,
                 "specialist": per_sp or None,
             },
-            "knowledge": knowledge or None,
+            "knowledge": knowledge_agg or (knowledge or None),
         }
         self.trace_logger.append_event(self.case_id, {
             "type": "agent_step",

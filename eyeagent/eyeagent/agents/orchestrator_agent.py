@@ -16,8 +16,8 @@ class OrchestratorAgent(DiagnosticBaseAgent):
     system_prompt = (
         "ROLE: Orchestrator/router. You never call tools.\n"
         "GOAL: Decide the next agent to run based on current state and preliminary results, and provide a planned pipeline.\n"
-        "REQUIRED ORDER (when images exist): preliminary → image_analysis → specialist → (optional) knowledge → follow_up → report.\n"
-        "INPUTS: patient, images, and prior agent outputs (preliminary/image_analysis/specialist/knowledge/follow_up).\n"
+        "REQUIRED ORDER (when images exist): preliminary → image_analysis → specialist → decision → follow_up → report (knowledge optional and usually integrated by follow_up).\n"
+        "INPUTS: patient, images, and prior agent outputs (preliminary/image_analysis/specialist/decision/knowledge/follow_up).\n"
         "OUTPUTS: planned_pipeline (list of agent roles in intended order), next_agent (string).\n"
         "HEURISTICS: If no images → go directly to report. If OCT modality → IA uses OCT tools. If screening confidence is very low, you may skip specialist.\n"
         "CONSTRAINTS: Do not invoke tools; only route among available/enabled agents. When images exist, never jump to report before running preliminary and image_analysis unless they are explicitly disabled. Re-evaluate after each step and finish with report."
@@ -56,7 +56,7 @@ class OrchestratorAgent(DiagnosticBaseAgent):
         knowledge = context.get("knowledge")
         follow_up = context.get("follow_up")
         configured = get_configured_agents()
-        known = ["preliminary", "image_analysis", "specialist", "knowledge", "follow_up", "report"]
+        known = ["preliminary", "image_analysis", "specialist", "decision", "knowledge", "follow_up", "report"]
         if configured:
             enabled_roles = {k for k, v in configured.items() if isinstance(v, dict) and (v.get("enabled") is not False)}
             available = [r for r in known if r in enabled_roles or r == "report"]
@@ -78,13 +78,14 @@ class OrchestratorAgent(DiagnosticBaseAgent):
         if prelim: completed.append("preliminary")
         if ia: completed.append("image_analysis")
         if specialist: completed.append("specialist")
+        if context.get("decision"): completed.append("decision")
         if knowledge: completed.append("knowledge")
         if follow_up: completed.append("follow_up")
 
         sys = (
             "You are the OrchestratorAgent (orchestrator). Route agents; do not call tools. "
             "Return ONLY JSON following the exact schema. Rules: "
-            "- Allowed roles: ['preliminary','image_analysis','specialist','knowledge','follow_up','report']\n"
+            "- Allowed roles: ['preliminary','image_analysis','specialist','decision','knowledge','follow_up','report']\n"
             "- Always include 'report' at the END of planned_pipeline exactly once\n"
             "- If images exist, do NOT jump to 'report' before 'preliminary' and 'image_analysis' unless they are disabled\n"
             "- next_agent must be one of allowed roles and normally the first incomplete in planned_pipeline\n"
@@ -96,6 +97,7 @@ class OrchestratorAgent(DiagnosticBaseAgent):
             f"Context summary (preliminary): {_summarize(prelim)}\n"
             f"Context summary (image_analysis): {_summarize(ia)}\n"
             f"Context summary (specialist): {_summarize(specialist)}\n"
+            f"Context summary (decision): {_summarize(context.get('decision'))}\n"
             f"Context summary (knowledge): {_summarize(knowledge)}\n"
             f"Context summary (follow_up): {_summarize(follow_up)}\n"
         )
@@ -108,7 +110,7 @@ class OrchestratorAgent(DiagnosticBaseAgent):
             # Fallback to plain JSON with explicit schema hint
             try:
                 schema = (
-                    '{"planned_pipeline": ["preliminary","image_analysis","specialist","knowledge","follow_up","report"],' \
+                    '{"planned_pipeline": ["preliminary","image_analysis","specialist","decision","follow_up","report"],' \
                     '"next_agent": "...", "routing_reasons": ["..."]}'
                 )
                 data = llm.invoke_json(system_prompt=sys, user_prompt=user, schema_hint=schema)
@@ -123,6 +125,8 @@ class OrchestratorAgent(DiagnosticBaseAgent):
             planned_pipeline = [r for r in routing.planned_pipeline if r in known]
             # Ensure report present exactly once and last
             planned_pipeline = [x for x in planned_pipeline if x != "report"] + ["report"]
+            # Remove standalone knowledge step (knowledge will be consulted by follow_up when needed)
+            planned_pipeline = [r for r in planned_pipeline if r != "knowledge"]
             # Constrain to available (enabled) roles, but always keep final 'report'
             planned_pipeline = [r for r in planned_pipeline if (r in available) or (r == "report")]
             next_agent = routing.next_agent if routing.next_agent in planned_pipeline else None

@@ -36,10 +36,21 @@ llm:
     #   temperature: 0.2
 
 # Optional tool filters by agent class name
+# Notes:
+# - Patterns here are Python regex, matched with re.search (substring). Use ^...$ for full-match.
+# - include: keep only matching tool ids (if provided)
+# - exclude: remove matching tool ids (applied after include)
 # Remove or adjust as needed
 tools_filter:
+  PreliminaryAgent:
+    include:
+      - "classification:modality"
+      - "classification:laterality"
+      - "classification:multidis"
+      - "rag:query"
+      - "web_search:.*"
   OrchestratorAgent:
-    include: ["classification:(modality|laterality|multidis)"]
+    include: []
   ImageAnalysisAgent:
     include:
       - "classification:cfp_quality"
@@ -47,11 +58,15 @@ tools_filter:
       - "segmentation:cfp_.*"
       - "segmentation:oct_.*"
       - "segmentation:ffa_.*"
+    exclude:
+      - ".*experimental.*"
   SpecialistAgent:
     include: ["disease_specific_cls:.*"]
   FollowUpAgent:
     include: ["classification:cfp_age"]
   KnowledgeAgent:
+    include: ["rag:query", "web_search:.*"]
+  DecisionAgent:
     include: ["rag:query", "web_search:.*"]
 
 # Notes:

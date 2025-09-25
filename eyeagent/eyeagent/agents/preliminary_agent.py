@@ -1,7 +1,7 @@
 from typing import Any, Dict, List
 from .base_agent import BaseAgent
 from .registry import register_agent
-from ..config.tools_filter import filter_tool_ids
+from ..config.tools_filter import filter_tool_ids, select_tool_ids
 
 
 @register_agent
@@ -9,10 +9,14 @@ class PreliminaryAgent(BaseAgent):
     role = "preliminary"
     name = "PreliminaryAgent"
     # Move screening tools here from Orchestrator
+    # Base hints; actual allowed tools are resolved from config at runtime
     allowed_tool_ids = [
         "classification:modality",
         "classification:laterality",
         "classification:multidis",
+        "rag:query",
+        "web_search:pubmed",
+        "web_search:tavily",
     ]
     system_prompt = (
         "ROLE: Preliminary screening.\n"
@@ -34,13 +38,14 @@ class PreliminaryAgent(BaseAgent):
     async def a_run(self, context: Dict[str, Any]) -> Dict[str, Any]:
         images = context.get("images", [])
 
-        # Filter tools by config
-        filtered_allowed = filter_tool_ids(self.__class__.__name__, list(self.allowed_tool_ids))
+        # Config-first: derive allowed tools from config patterns, defaulting to base list
+        filtered_allowed = select_tool_ids(self.__class__.__name__, base_tool_ids=self.allowed_tool_ids, role=self.role)
 
         tool_calls: List[Dict[str, Any]] = []
         modality_results: List[Dict[str, Any]] = []
         laterality_results: List[Dict[str, Any]] = []
         screening_results: List[Dict[str, Any]] = []
+        knowledge_blocks: List[Dict[str, Any]] = []
 
         # Always attempt modality and laterality for each image (if tools allowed)
         async with self._client_ctx() as client:
@@ -69,10 +74,41 @@ class PreliminaryAgent(BaseAgent):
                 tool_calls.append(tc)
                 screening_results = [tc]
 
+            # Optional: knowledge evidence based on top screening candidates
+            kn_allowed = select_tool_ids(self.__class__.__name__, base_tool_ids=["rag:query", "web_search:pubmed", "web_search:tavily"], role=self.role)
+            if kn_allowed:
+                # Construct a simple query from top screening labels if present
+                query = None
+                try:
+                    out = (screening_results[0] or {}).get("output") if screening_results else None
+                    if isinstance(out, dict):
+                        probs = out.get("probabilities") if isinstance(out.get("probabilities"), dict) else out
+                        if isinstance(probs, dict):
+                            tops = sorted(probs.items(), key=lambda kv: float(kv[1] or 0), reverse=True)[:3]
+                            query = ", ".join([k for k, _ in tops])
+                except Exception:
+                    query = None
+                plan = await self.plan_tools(f"If helpful, fetch brief knowledge for: {query or 'ophthalmology screening findings'}", kn_allowed)
+                for step in (plan or []):
+                    tid = step.get("tool_id")
+                    if tid not in kn_allowed:
+                        continue
+                    if not self._knowledge_allowed():
+                        break
+                    args = self._apply_knowledge_defaults(tid, step.get("arguments"))
+                    tc = await self._call_tool(client, tid, args)
+                    self._note_knowledge_called()
+                    tc["reasoning"] = step.get("reasoning")
+                    tool_calls.append(tc)
+                    out = tc.get("output")
+                    if isinstance(out, dict):
+                        knowledge_blocks.append(out)
+
         outputs = {
             "modality_results": modality_results,
             "laterality_results": laterality_results,
             "screening_results": screening_results,
+            "knowledge": {"query": query, "items": knowledge_blocks} if knowledge_blocks else None,
         }
 
         # Append trace event for UI streaming consistency

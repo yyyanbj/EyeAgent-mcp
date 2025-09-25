@@ -2,7 +2,7 @@ from typing import Any, Dict, List
 
 from .base_agent import BaseAgent as DiagnosticBaseAgent
 from .registry import register_agent
-from ..config.tools_filter import filter_tool_ids
+from ..config.tools_filter import filter_tool_ids, select_tool_ids
 
 
 @register_agent
@@ -87,7 +87,7 @@ class KnowledgeAgent(DiagnosticBaseAgent):
         query = self._build_query(context)
 
         # Prefer RAG; optionally use web search when planner or fallback includes it
-        allowed = filter_tool_ids(self.__class__.__name__, list(self.allowed_tool_ids))
+        allowed = select_tool_ids(self.__class__.__name__, base_tool_ids=self.allowed_tool_ids, role=self.role)
         plan = await self.plan_tools(
             f"Query knowledge sources for: {query}",
             allowed,

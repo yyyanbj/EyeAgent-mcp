@@ -2,7 +2,7 @@ from typing import Any, Dict, List
 from .base_agent import BaseAgent as DiagnosticBaseAgent
 from .registry import register_agent
 from ..tools.tool_registry import specialist_tools, get_tool, resolve_specialist_tools, role_tool_ids
-from ..config.tools_filter import filter_tool_ids
+from ..config.tools_filter import filter_tool_ids, select_tool_ids
 from fastmcp import Client
 
 @register_agent
@@ -35,8 +35,8 @@ class SpecialistAgent(DiagnosticBaseAgent):
         # Fallback: dynamic default → allow all specialist tools if none resolved
         if not tools_meta:
             all_specialist_ids = role_tool_ids("specialist")
-            # Apply include/exclude filter from config (regex/list)
-            filtered_ids = filter_tool_ids(self.__class__.__name__, all_specialist_ids)
+            # Config-first selection by role
+            filtered_ids = select_tool_ids(self.__class__.__name__, base_tool_ids=all_specialist_ids, role=self.role)
             self.allowed_tool_ids = filtered_ids
         else:
             self.allowed_tool_ids = [m.get("tool_id") for m in tools_meta]
@@ -129,6 +129,28 @@ class SpecialistAgent(DiagnosticBaseAgent):
                             results_by_image.setdefault(entry["image_id"], []).append(entry)
                         results_flat.append(entry)
 
+            # Optional: knowledge support for specific diseases
+            kn_allowed = select_tool_ids(self.__class__.__name__, base_tool_ids=["rag:query", "web_search:pubmed", "web_search:tavily"], role=self.role)
+            kn_blocks: List[Dict[str, Any]] = []
+            kn_query = None
+            if kn_allowed and candidate_diseases:
+                kn_query = ", ".join(candidate_diseases[:5])
+                plan2 = await self.plan_tools(f"If beneficial, fetch brief evidence for: {kn_query}", kn_allowed)
+                for step in (plan2 or []):
+                    tid = step.get("tool_id")
+                    if tid not in kn_allowed:
+                        continue
+                    if not self._knowledge_allowed():
+                        break
+                    args = self._apply_knowledge_defaults(tid, step.get("arguments"))
+                    tc = await self._call_tool(client, tid, args)
+                    self._note_knowledge_called()
+                    tc["reasoning"] = step.get("reasoning")
+                    tool_calls.append(tc)
+                    out = tc.get("output")
+                    if isinstance(out, dict):
+                        kn_blocks.append(out)
+
         # Narrative summary for specialist grading (per-image aware)
         def _fmt_conf(c):
             try:
@@ -172,6 +194,7 @@ class SpecialistAgent(DiagnosticBaseAgent):
             "disease_grades": results_flat,
             "per_image": {"disease_grades": results_by_image},
             "narrative": reasoning,
+            "knowledge": {"query": kn_query, "items": kn_blocks} if kn_blocks else None,
         }
         self.trace_logger.append_event(self.case_id, {
             "type": "agent_step",
