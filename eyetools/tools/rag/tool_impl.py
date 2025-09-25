@@ -6,6 +6,8 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Tuple, Optional
 import hashlib
+import sys
+import importlib.util
 
 
 def _read_text_file(path: Path, max_bytes: int = 2_000_000, pdf_max_pages: int | None = 300) -> str:
@@ -199,15 +201,31 @@ class RAGQueryTool:
             return {"warmed_up": True, "mode": self.mode, "chunks": len(self._index), "sec": round(time.time() - start, 3)}
         # Vector mode ingestion
         try:
-            # Import inside to keep main process free of deps
-            from .vectorstore_qdrant import VectorStore  # type: ignore
+            # Import inside to keep main process free of deps; support both package and path-based loading
+            def _load_vectorstore_cls():
+                try:
+                    from .vectorstore_qdrant import VectorStore  # type: ignore
+                    return VectorStore
+                except Exception:
+                    here = Path(__file__).parent
+                    vs_path = here / "vectorstore_qdrant.py"
+                    spec = importlib.util.spec_from_file_location("rag_vectorstore_qdrant", vs_path)
+                    if spec and spec.loader:
+                        mod = importlib.util.module_from_spec(spec)
+                        sys.modules.setdefault("rag_vectorstore_qdrant", mod)
+                        spec.loader.exec_module(mod)  # type: ignore[attr-defined]
+                        return getattr(mod, "VectorStore")
+                    raise
+
+            VectorStore = _load_vectorstore_cls()
             # Minimal FastEmbed wrapper (no external keys needed)
             try:
                 from fastembed import TextEmbedding  # type: ignore
+                from langchain_core.embeddings import Embeddings  # type: ignore
             except Exception as e:
                 return {"warmed_up": False, "mode": self.mode, "error": f"fastembed missing: {e}"}
 
-            class _FastEmbedWrapper:
+            class _FastEmbedWrapper(Embeddings):
                 def __init__(self, model_name: str = "BAAI/bge-small-en-v1.5"):
                     self.model = TextEmbedding(model_name=model_name)
                     self._dim: Optional[int] = None
@@ -305,11 +323,27 @@ class RAGQueryTool:
         # Vector mode predict
         if self.mode == "qdrant":
             try:
-                from .vectorstore_qdrant import VectorStore  # type: ignore
+                def _load_vectorstore_cls():
+                    try:
+                        from .vectorstore_qdrant import VectorStore  # type: ignore
+                        return VectorStore
+                    except Exception:
+                        here = Path(__file__).parent
+                        vs_path = here / "vectorstore_qdrant.py"
+                        spec = importlib.util.spec_from_file_location("rag_vectorstore_qdrant", vs_path)
+                        if spec and spec.loader:
+                            mod = importlib.util.module_from_spec(spec)
+                            sys.modules.setdefault("rag_vectorstore_qdrant", mod)
+                            spec.loader.exec_module(mod)  # type: ignore[attr-defined]
+                            return getattr(mod, "VectorStore")
+                        raise
+
+                VectorStore = _load_vectorstore_cls()
                 # Recreate vectorstore on demand using stored cfg and a fresh embedder
                 from fastembed import TextEmbedding  # type: ignore
+                from langchain_core.embeddings import Embeddings  # type: ignore
 
-                class _FastEmbedWrapper:
+                class _FastEmbedWrapper(Embeddings):
                     def __init__(self, model_name: str = "BAAI/bge-small-en-v1.5"):
                         self.model = TextEmbedding(model_name=model_name)
                     def embed_documents(self, texts: List[str]) -> List[List[float]]:
