@@ -728,9 +728,76 @@ async def _continue_and_stream(case_id: str, additional_instruction: str, progre
     patient = doc.get("patient", {})
     images_meta = doc.get("images", [])
     image_paths = [itm.get("path") for itm in images_meta if itm.get("path")]
+    # Prepare LLM conversation context from prior run(s)
+    def _load_llm_messages(cases_root: Path, cid: str) -> List[Dict[str, str]]:
+        msgs: List[Dict[str, str]] = []
+        conv_path = cases_root / cid / "conversation.jsonl"
+        if conv_path.exists():
+            try:
+                with open(conv_path, "r", encoding="utf-8") as cf:
+                    for line in cf:
+                        try:
+                            rec = json.loads(line.strip())
+                        except Exception:
+                            continue
+                        r = rec.get("role")
+                        c = rec.get("content")
+                        if isinstance(r, str) and isinstance(c, str):
+                            msgs.append({"role": r, "content": c})
+                return msgs
+            except Exception:
+                msgs = []  # fall through to event-based reconstruction
+        # Fallback: reconstruct minimal text messages from events
+        try:
+            evs = doc.get("events", [])
+            for ev in evs:
+                et = ev.get("type")
+                if et == "agent_step":
+                    agent = ev.get("agent") or "Agent"
+                    role = ev.get("role") or ""
+                    title = f"{agent} ({role})" if role else agent
+                    reasoning = ev.get("reasoning")
+                    if isinstance(reasoning, str) and reasoning:
+                        msgs.append({"role": "assistant", "content": f"{title} reasoning: {reasoning}"})
+                    outputs = ev.get("outputs")
+                    if isinstance(outputs, dict) and outputs:
+                        try:
+                            import json as _json
+                            s = _json.dumps(outputs, ensure_ascii=False, separators=(",", ":"))
+                        except Exception:
+                            s = str(outputs)
+                        msgs.append({"role": "assistant", "content": f"{title} outputs: {s}"})
+                elif et == "tool_call":
+                    agent = ev.get("agent") or "Agent"
+                    role = ev.get("role") or ""
+                    title = f"{agent} ({role})" if role else agent
+                    tool_id = ev.get("tool_id") or "tool"
+                    status = ev.get("status") or ""
+                    args = ev.get("arguments")
+                    out = ev.get("output")
+                    try:
+                        import json as _json
+                        args_s = _json.dumps(args, ensure_ascii=False, separators=(",", ":"))
+                    except Exception:
+                        args_s = str(args)
+                    try:
+                        import json as _json
+                        out_s = _json.dumps(out, ensure_ascii=False, separators=(",", ":"))
+                    except Exception:
+                        out_s = str(out)
+                    msgs.append({
+                        "role": "assistant",
+                        "content": f"{title} called {tool_id} -> {status}\nargs: {args_s}\noutput: {out_s}",
+                    })
+        except Exception:
+            pass
+        return msgs
+    llm_messages = _load_llm_messages(cases_dir, case_id)
     # Merge additional instruction
     if additional_instruction:
         patient = {**patient, "instruction": additional_instruction}
+        # Also append this as a user message to the LLM context so agents see it explicitly
+        llm_messages.append({"role": "user", "content": additional_instruction})
 
     # Prepare streaming variables
     messages = _events_to_messages(doc.get("events", []), case_id=case_id)
@@ -738,7 +805,7 @@ async def _continue_and_stream(case_id: str, additional_instruction: str, progre
 
     # Continue by invoking pipeline again, appending to same case
     trace = TraceLogger(base_dir=str(cases_dir))
-    task = asyncio.create_task(run_diagnosis_async(patient, images_meta, trace=trace, case_id=case_id))
+    task = asyncio.create_task(run_diagnosis_async(patient, images_meta, trace=trace, case_id=case_id, messages=llm_messages))
     last_count = len(doc.get("events", []))
 
     while not task.done():
@@ -890,8 +957,21 @@ def build_interface() -> gr.Blocks:
                 new_msgs.append({"role": "user", "content": quick_text})
                 return new_instr, new_msgs, new_msgs, ""
 
+            def apply_preset(cur_text: str, selected: str, msgs: List[Dict[str, str]]):
+                # When a preset is selected, immediately insert it into Instruction and add a user message
+                if not selected:
+                    return cur_text, msgs, msgs, ""
+                if not cur_text:
+                    new_instr = selected
+                else:
+                    new_instr = (cur_text + ("\n" if not cur_text.endswith("\n") else "") + selected)[:4000]
+                new_msgs = list(msgs or [])
+                new_msgs.append({"role": "user", "content": selected})
+                return new_instr, new_msgs, new_msgs, ""
+
             demo.load(load_presets, inputs=None, outputs=[preset_dropdown, instruction])
-            preset_dropdown.change(on_presets_select, inputs=[preset_dropdown], outputs=[quick_input])
+            # Selecting a preset now directly inserts into Instruction and chat; Quick Insert field is cleared
+            preset_dropdown.change(apply_preset, inputs=[instruction, preset_dropdown, chat_state], outputs=[instruction, chatbot, chat_state, quick_input])
             quick_input.submit(quick_insert, inputs=[instruction, quick_input, chat_state], outputs=[instruction, chatbot, chat_state, quick_input])
 
             run_btn.click(on_run, inputs=[image_uploader, instruction, show_patient, patient_id, patient_age, patient_gender, backend_dropdown, chat_state], outputs=[chatbot, final_json, chat_state])

@@ -13,6 +13,46 @@ from typing import Tuple
 
 # Tool IDs match MCP tool names for simplicity
 TOOL_REGISTRY: Dict[str, Dict[str, Any]] = {
+    # Multimodal conversion/generation
+    "multimodal:fundus2oct": {
+        "mcp_name": "multimodal:fundus2oct",
+        "version": "0.1.0",
+        "role": "multimodal",
+        "modalities": ["CFP"],
+        "desc": "Generate a pseudo-OCT volume from a fundus (CFP) image and export montage/frames/GIF.",
+        "args_schema": {
+            "type": "object",
+            "properties": {
+                "image_path": {"type": "string"},
+                "sampling_steps": {"type": "integer"},
+                "slices": {"type": "integer"},
+                "height": {"type": "integer"},
+                "width": {"type": "integer"}
+            },
+            "required": ["image_path"]
+        },
+        "desc_long": "Creates a lightweight 3D-like OCT slice stack from CFP with deterministic placeholders when heavy models are unavailable. Outputs include montage PNG, frame directory, and animated GIF."
+    },
+    "multimodal:fundus2eyeglobe": {
+        "mcp_name": "multimodal:fundus2eyeglobe",
+        "version": "0.1.0",
+        "role": "multimodal",
+        "modalities": ["CFP"],
+        "desc": "Generate a simple eye-globe point cloud and PNG/GIF views from a fundus image.",
+        "args_schema": {
+            "type": "object",
+            "properties": {
+                "image_path": {"type": "string"},
+                "eye_category": {"type": "string", "enum": ["OD", "OS"]},
+                "sampling_steps": {"type": "integer"},
+                "SE": {"type": "number"},
+                "AL": {"type": "number"},
+                "num_points": {"type": "integer"}
+            },
+            "required": ["image_path"]
+        },
+        "desc_long": "Produces a synthetic eye globe geometry (PLY) and projections for visualization; accepts optional eye category (OD/OS) and biometric parameters (SE, AL)."
+    },
     # Classification
     "classification:modality": {
         "mcp_name": "classification:modality",

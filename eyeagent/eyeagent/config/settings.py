@@ -73,6 +73,10 @@ DEFAULT_SETTINGS: Dict[str, Any] = {
             "class": "eyeagent.agents.knowledge_agent.KnowledgeAgent",
             "enabled": True,
         },
+        "multimodal": {
+            "class": "eyeagent.agents.multimodal_agent.MultimodalAgent",
+            "enabled": True,
+        },
     },
     # Optional tool filters per agent
     "tools_filter": {
@@ -96,6 +100,9 @@ DEFAULT_SETTINGS: Dict[str, Any] = {
         },
         "DecisionAgent": {
             "include": ["rag:query", "web_search:.*"]
+        },
+        "MultimodalAgent": {
+            "include": ["multimodal:fundus2oct", "multimodal:fundus2eyeglobe"]
         },
     },
 }

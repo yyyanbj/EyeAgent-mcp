@@ -31,3 +31,5 @@ logs/
 !.env.example
 
 temp_cases_test/
+datasets/
+benchmark_results/

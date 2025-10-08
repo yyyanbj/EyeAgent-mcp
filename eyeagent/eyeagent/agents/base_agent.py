@@ -49,15 +49,18 @@ class BaseAgent:
     system_prompt: str = "You are a diagnostic agent."
     # Class-level LLM shared per agent class (can be overridden in subclasses)
     llm = None
+    # Optional override: fetch LLM config using a different agent name
+    llm_config_name: Optional[str] = None
 
     def __init__(self, mcp_url: str, trace_logger: TraceLogger, case_id: str):
         self.mcp_url = mcp_url
         self.trace_logger = trace_logger
         self.case_id = case_id
         # Initialize class-level LLM if not set
+        cfg_agent_name = self.__class__.llm_config_name or self.__class__.__name__
         if self.__class__.llm is None:
             try:
-                self.__class__.llm = build_chat_model(self.__class__.__name__)
+                self.__class__.llm = build_chat_model(cfg_agent_name)
             except Exception:
                 self.__class__.llm = None
         # Load system prompt override from config if present

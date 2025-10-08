@@ -21,6 +21,9 @@ dependencies = [
     "python-dotenv",
     "loguru",
     "prometheus-client>=0.22.1",
+    "scikit-learn>=1.7.2",
+    "matplotlib>=3.10.6",
+    "seaborn>=0.13.2",
 ]
 
 [project.optional-dependencies]

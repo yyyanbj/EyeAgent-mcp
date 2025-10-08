@@ -30,6 +30,7 @@ import time
 import logging
 import inspect
 import argparse
+import re
 from typing import Any, Dict, Union, List
 
 import torch
@@ -46,6 +47,29 @@ def _disease_from_variant(variant: str) -> str:
             base = base[:-len(suf)]
             break
     return base
+
+
+def _read_modalities(weights_root: str, variant: str) -> List[str] | None:
+    """Read modalities.txt for a variant directory.
+
+    Accepts either one modality per line, or a single line with comma / semicolon / pipe separated values.
+    Returns None if file doesn't exist or parsing yields no tokens.
+    """
+    path = os.path.join(weights_root, variant, "modalities.txt")
+    if not os.path.isfile(path):
+        return None
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            lines = [l.strip() for l in f.readlines() if l.strip()]
+        if not lines:
+            return None
+        if len(lines) == 1 and re.search(r"[,;|]", lines[0]):
+            # split by common delimiters
+            tokens = [t.strip() for t in re.split(r"[,;|]", lines[0]) if t.strip()]
+            lines = tokens or lines
+        return lines or None
+    except Exception:  # pragma: no cover
+        return None
 
 
 def _build_dinov3_head(num_classes: int, skip_hub: bool = False) -> nn.Module:
@@ -112,6 +136,7 @@ class DiseaseSpecificClassificationTool:
             transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
         ])
         self.classes: List[str] | None = None
+        self.modalities: List[str] | None = None
         self.disease_name = _disease_from_variant(self.variant)
         self._loaded = False
 
@@ -127,6 +152,7 @@ class DiseaseSpecificClassificationTool:
         disease_name = _disease_from_variant(variant) if variant else None
         weights_root = (params or {}).get("weights_root", "weights/disease-specific")
         classes: List[str] | None = None
+        modalities: List[str] | None = None
         if variant:
             label_file = os.path.join(weights_root, variant, "label.txt")
             if os.path.isfile(label_file):
@@ -162,6 +188,10 @@ class DiseaseSpecificClassificationTool:
             out["disease"] = disease_name
         if classes:
             out["classes"] = classes
+        if variant:
+            modalities = _read_modalities(weights_root, variant)
+        if modalities:
+            out["modalities"] = modalities
         return out
 
     # Compatibility with framework pattern
@@ -175,6 +205,8 @@ class DiseaseSpecificClassificationTool:
             self.model = _build_dinov3_head(1, skip_hub=self.skip_hub)
             self.classes = [self.disease_name]
             self.model.to(self.device).eval()
+            # Load modalities metadata (graceful if absent)
+            self.modalities = _read_modalities(self.weights_root, self.variant)
             self._loaded = True
             return
         # attempt to read explicit label list (one per line) if present
@@ -248,6 +280,8 @@ class DiseaseSpecificClassificationTool:
             else:
                 self.classes = [f"cls_{i}" for i in range(num_classes)]
         self.model.to(self.device).eval()
+        # Attach modalities metadata once variant directory confirmed
+        self.modalities = _read_modalities(self.weights_root, self.variant)
         self._loaded = True
 
     # ------------------------------------------------------------------

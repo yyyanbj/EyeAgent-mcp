@@ -1,0 +1,40 @@
+# VQA OCT Benchmark Configuration
+# Evaluates EyeAgent diagnostic workflow on the OCT VQA dataset in dry-run mode
+
+dataset:
+  name: "vqa_oct"
+  path: "./datasets/VQA_diagnosis_OCT_benchmark.csv"
+  image_column: "image_path"
+  label_column: "diagnosis"
+  class_names:
+    - "Normal"
+    - "Age-related macular degeneration"
+    - "Wet age-related macular degeneration"
+    - "Epiretinal membrane"
+    - "Diabetic macular edema"
+    - "Retinal vein occlusion"
+    - "Central serous chorioretinopathy"
+    - "Macular Hole"
+  split: "test"
+  max_samples: null
+
+model:
+  workflow_backend: "langgraph"
+  mcp_server_url: "http://localhost:5789/mcp/"
+  dry_run: false
+  enable_format_agent: true
+
+metrics:
+  compute_accuracy: true
+  compute_auc: true
+  compute_f1: true
+  compute_precision: true
+  compute_recall: true
+  average: "macro"
+
+output:
+  output_dir: "./benchmark_results/vqa_oct"
+  save_predictions: true
+  save_detailed_report: true
+  save_confusion_matrix: true
+  verbose: true

@@ -24,7 +24,7 @@ from ..metrics.metrics import step_timer
 from ..config.settings import get_specialist_selection_settings
 from ..core.diagnosis_utils import get_candidate_diseases_from_probs
 
-MCP_SERVER_URL = os.getenv("MCP_SERVER_URL", "http://localhost:8000/mcp/")
+MCP_SERVER_URL = os.getenv("MCP_SERVER_URL", "http://localhost:5789/mcp/")
 SCHEMA_VERSION = "1.0.0"
 
 # Help diagnose which code path is running (local source vs installed package)
