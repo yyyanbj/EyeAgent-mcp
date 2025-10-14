@@ -2,6 +2,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 from typing import Any, Dict, Optional
+import os as _os
 import yaml
 from loguru import logger
 
@@ -21,7 +22,7 @@ DEFAULT_SETTINGS: Dict[str, Any] = {
     # Workflow + agent wiring is config-driven; default backend is LangGraph
     "workflow": {
         "mode": "graph",   # kept for compatibility
-        "backend": os.getenv("EYEAGENT_WORKFLOW_BACKEND", "langgraph"),  # langgraph | profile | interaction
+    "backend": os.getenv("EYEAGENT_WORKFLOW_BACKEND", "langgraph"),  # langgraph | profile | interaction | single
         "specialist": {
             # threshold to select candidate diseases from screening probabilities
             "candidate_threshold": float(os.getenv("EYEAGENT_CANDIDATE_THRESHOLD", "0.3")),
@@ -186,18 +187,26 @@ def get_workflow_mode() -> str:
 def get_workflow_backend() -> str:
     """Return the configured backend name.
 
-    Valid values: langgraph | profile | interaction
-    Fallback order:
-    - workflow.backend (explicit)
-    - map legacy workflow.mode to a backend (graph->langgraph, interaction->interaction, profile->profile)
-    - default: langgraph
+    Valid values: langgraph | profile | interaction | single
+    Resolution order (runtime-evaluated):
+    1) Env EYEAGENT_WORKFLOW_BACKEND (highest priority)
+    2) workflow.backend from config file
+    3) Legacy workflow.mode mapping (graph->langgraph, interaction->interaction, profile->profile)
+    4) default: langgraph
     """
+    # 1) Env override
+    env_backend = (_os.getenv("EYEAGENT_WORKFLOW_BACKEND") or "").strip().lower()
+    if env_backend in {"langgraph", "profile", "interaction", "single"}:
+        return env_backend
+
+    # 2) Config file
     cfg = Settings().load()
     wf = cfg.get("workflow") or {}
     backend = (wf.get("backend") or "").strip().lower()
-    if backend in {"langgraph", "profile", "interaction"}:
+    if backend in {"langgraph", "profile", "interaction", "single"}:
         return backend
-    # map legacy mode
+
+    # 3) Legacy mode mapping
     mode = str((wf.get("mode") or "")).strip().lower()
     if mode == "graph":
         return "langgraph"
@@ -205,6 +214,8 @@ def get_workflow_backend() -> str:
         return "interaction"
     if mode == "profile":
         return "profile"
+
+    # 4) Default
     return "langgraph"
 
 

@@ -39,6 +39,12 @@ class MetricsConfig:
     compute_recall: bool = True
     average: str = "macro"  # macro, micro, weighted for multi-class metrics
     
+def _default_concurrency() -> int:
+    """Choose a sensible default concurrency based on available CPUs."""
+    cpu_count = os.cpu_count() or 4
+    # Use at least 2 workers, but avoid overwhelming the host
+    return max(2, min(cpu_count, 8))
+
 
 @dataclass
 class OutputConfig:
@@ -53,12 +59,20 @@ class OutputConfig:
 
 
 @dataclass
+class RunnerConfig:
+    """Configuration for benchmark execution behavior."""
+    concurrency: int = field(default_factory=_default_concurrency)
+    skip_existing_results: bool = True
+
+
+@dataclass
 class BenchmarkConfig:
     """Main configuration class for benchmarking."""
     dataset: DatasetConfig
     model: ModelConfig = field(default_factory=ModelConfig)
     metrics: MetricsConfig = field(default_factory=MetricsConfig)
     output: OutputConfig = field(default_factory=OutputConfig)
+    runner: RunnerConfig = field(default_factory=RunnerConfig)
     
     @classmethod
     def from_yaml(cls, config_path: str) -> 'BenchmarkConfig':
@@ -70,7 +84,8 @@ class BenchmarkConfig:
             dataset=DatasetConfig(**config_dict['dataset']),
             model=ModelConfig(**config_dict.get('model', {})),
             metrics=MetricsConfig(**config_dict.get('metrics', {})),
-            output=OutputConfig(**config_dict.get('output', {}))
+            output=OutputConfig(**config_dict.get('output', {})),
+            runner=RunnerConfig(**config_dict.get('runner', {})),
         )
     
     def to_yaml(self, config_path: str) -> None:
@@ -79,7 +94,8 @@ class BenchmarkConfig:
             'dataset': self.dataset.__dict__,
             'model': self.model.__dict__,
             'metrics': self.metrics.__dict__,
-            'output': self.output.__dict__
+            'output': self.output.__dict__,
+            'runner': self.runner.__dict__,
         }
         
         os.makedirs(os.path.dirname(config_path), exist_ok=True)

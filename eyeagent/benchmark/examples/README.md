@@ -27,4 +27,5 @@ results = await run_benchmark_from_config("examples/basic_benchmark.yaml")
 
 ## Configuration Fields
 
-See `../config.py` for detailed documentation of all configuration options.
+See `../config.py` for detailed documentation of all configuration options, including the
+`runner` section where you can control concurrency and cache reuse for faster experiments.

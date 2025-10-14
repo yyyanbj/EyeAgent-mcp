@@ -29,7 +29,7 @@ The benchmark module consists of several key components:
 
 ```python
 import asyncio
-from eyeagent.benchmark import BenchmarkConfig, BenchmarkRunner
+from eyeagent.benchmark import BenchmarkConfig, BenchmarkRunner, RunnerConfig
 from eyeagent.benchmark.config import DatasetConfig
 
 # Create configuration
@@ -40,7 +40,8 @@ config = BenchmarkConfig(
         image_column="image_path",
         label_column="diagnosis",
         class_names=["Normal", "DR", "AMD", "Glaucoma"]
-    )
+  ),
+  runner=RunnerConfig(concurrency=4, skip_existing_results=True),
 )
 
 # Run benchmark
@@ -117,6 +118,22 @@ output:
   verbose: true
 ```
 
+### Runner Configuration
+
+```yaml
+runner:
+  concurrency: 4           # Number of samples processed in parallel (0 = auto)
+  skip_existing_results: true  # Reuse cached results when available
+```
+
+`concurrency` controls how many diagnostic workflows run side-by-side. Set it to `0` to
+let the runner pick a value based on available CPU cores. When
+`skip_existing_results` is enabled, the runner compares the current configuration
+fingerprint with any cached payloads in `benchmark_results/`. The match is based on
+normalized config content (not timestamps or filenames), so even legacy cache files with
+timestamped names are recognized and reused, dramatically speeding up iterative
+development.
+
 ## Architecture
 
 ### Data Flow
@@ -155,6 +172,8 @@ See the `examples/` directory for various configuration examples:
 - `dr_screening_benchmark.yaml`: Diabetic retinopathy screening
 - `multi_disease_benchmark.yaml`: Multi-disease classification
 - `dry_run_benchmark.yaml`: Testing without model inference
+- `vqa_cfp_real.yaml`: Multi-agent workflow on VQA CFP dataset
+- `vqa_cfp_single_agent.yaml`: Single-agent (UnifiedAgent) on the same dataset for direct comparison
 
 ### Running Examples
 
@@ -162,6 +181,11 @@ See the `examples/` directory for various configuration examples:
 # Run the example script
 cd eyeagent/benchmark/examples
 python run_example.py
+
+# Or run via CLI for single-agent vs multi-agent:
+cd ..
+python cli.py run --config examples/vqa_cfp_single_agent.yaml
+python cli.py run --config examples/vqa_cfp_real.yaml
 ```
 
 ## Output
@@ -194,6 +218,33 @@ The benchmark generates several output files:
 }
 ```
 
+## Rerunning Failed Cases
+
+If a long benchmark run hits transient failures (for example the MCP server was
+temporarily unavailable), you can reprocess only the failed samples without
+touching the successes. The helper script `scripts/rerun_failed_cases.py`
+rescans an existing output directory, reruns the failed indices via the
+`BenchmarkRunner`, and regenerates the aggregate metrics/report payloads.
+
+```bash
+python scripts/rerun_failed_cases.py \
+  --config benchmark/examples/vqa_cfp_real.yaml
+```
+
+The script assumes the same configuration that produced the original
+`case_results` (the output directory defaults to
+`<output_dir>/case_results`). Use `--cases-dir` to override the search path, and
+`--keep-history` to preserve previous JSON files alongside the refreshed ones.
+After rerunning, the tool writes:
+
+- `rerun_results_<timestamp>.json` with the latest per-case payloads
+- `rerun_metrics_<timestamp>.json` containing updated metrics (if available)
+- `rerun_summary_<timestamp>.json` summarizing the run and pointing to the
+  regenerated artifacts
+
+Pass `--dry-run` if you only need the summary/metrics regenerated from existing
+case files without executing new diagnoses.
+
 ## Best Practices
 
 ### Dataset Preparation
@@ -216,8 +267,9 @@ The benchmark generates several output files:
 
 1. Use `max_samples` to limit dataset size during development
 2. Disable detailed reports for large-scale evaluations
-3. Consider batch processing for very large datasets
-4. Monitor resource usage during evaluation
+3. Increase the `runner.concurrency` value or pass `--concurrency` via the CLI to leverage parallelism
+4. Leave `runner.skip_existing_results` enabled to reuse cached metrics when the dataset hasn't changed
+5. Monitor resource usage during evaluation
 
 ## Troubleshooting
 

@@ -26,6 +26,8 @@ async def run_diagnosis_async(
         from .workflows.profile import run_diagnosis_async as _impl
     elif backend == "interaction":
         from .workflows.interaction import run_diagnosis_async as _impl
+    elif backend == "single":
+        from .workflows.single import run_diagnosis_async as _impl
     else:
         from .workflows.langgraph import run_diagnosis_async as _impl
     return await _impl(patient, images, trace, case_id, messages)

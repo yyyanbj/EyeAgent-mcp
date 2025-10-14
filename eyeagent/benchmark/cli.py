@@ -20,11 +20,12 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from benchmark import (
     BenchmarkConfig,
     BenchmarkRunner,
-    run_benchmark_from_config,
     DatasetConfig,
     ModelConfig,
     MetricsConfig,
-    OutputConfig
+    OutputConfig,
+    RunnerConfig,
+    rerun_failed_cases,
 )
 from benchmark.dataset_loader import create_sample_dataset
 
@@ -73,7 +74,19 @@ Examples:
                            help='Enable verbose output')
     run_parser.add_argument('--no-format-agent', action='store_true',
                            help='Disable format agent')
+    run_parser.add_argument('--concurrency', type=int,
+                           help='Number of samples to evaluate in parallel (0 = auto)')
+    run_parser.add_argument('--force-rerun', action='store_true',
+                           help='Ignore cached results and force a fresh run')
     
+    # Rerun failed cases command
+    rerun_parser = subparsers.add_parser('rerun-failed', help='Rerun only failed benchmark cases')
+    rerun_parser.add_argument('--config', '-c', required=True, help='Path to YAML configuration file')
+    rerun_parser.add_argument('--cases-dir', type=str, help='Override case results directory (defaults to <output_dir>/case_results)')
+    rerun_parser.add_argument('--keep-history', action='store_true', help='Preserve previous case JSON files alongside refreshed ones')
+    rerun_parser.add_argument('--dry-run', action='store_true', help='Skip diagnostics and only recompute metrics from existing results')
+    rerun_parser.add_argument('--verbose', '-v', action='store_true', help='Enable verbose logging output')
+
     # Create dataset command
     create_parser = subparsers.add_parser('create-dataset', help='Create sample dataset')
     create_parser.add_argument('--output', '-o', type=str, required=True,
@@ -98,8 +111,20 @@ async def run_benchmark_cli(args):
     if args.config:
         # Use configuration file
         logger.info(f"Running benchmark with config: {args.config}")
-        results = await run_benchmark_from_config(args.config)
-        
+        config = BenchmarkConfig.from_yaml(args.config)
+
+        # Ensure backend env is set according to config for this run
+        if config.model.workflow_backend:
+            os.environ["EYEAGENT_WORKFLOW_BACKEND"] = str(config.model.workflow_backend)
+
+        if args.concurrency is not None:
+            config.runner.concurrency = args.concurrency
+        if args.force_rerun:
+            config.runner.skip_existing_results = False
+
+        runner = BenchmarkRunner(config)
+        results = await runner.run_benchmark()
+
     else:
         # Build config from CLI arguments
         if not args.dataset:
@@ -112,6 +137,12 @@ async def run_benchmark_cli(args):
         
         logger.info(f"Running benchmark with dataset: {args.dataset}")
         
+        runner_config = RunnerConfig()
+        if args.concurrency is not None:
+            runner_config.concurrency = args.concurrency
+        if args.force_rerun:
+            runner_config.skip_existing_results = False
+
         config = BenchmarkConfig(
             dataset=DatasetConfig(
                 name=Path(args.dataset).stem,
@@ -129,8 +160,11 @@ async def run_benchmark_cli(args):
             output=OutputConfig(
                 output_dir=args.output,
                 verbose=args.verbose
-            )
+            ),
+            runner=runner_config,
         )
+        if config.model.workflow_backend:
+            os.environ["EYEAGENT_WORKFLOW_BACKEND"] = str(config.model.workflow_backend)
         
         runner = BenchmarkRunner(config)
         results = await runner.run_benchmark()
@@ -142,6 +176,7 @@ async def run_benchmark_cli(args):
     print(f"Dataset: {results['config']['dataset']['name']}")
     print(f"Samples: {len(results['results'])}")
     print(f"Classes: {results['config']['dataset']['class_names']}")
+    print(f"Concurrency: {results['config']['runner']['concurrency']}")
     print(f"Runtime: {results['runtime']:.2f} seconds")
     print()
     print("METRICS:")
@@ -163,6 +198,49 @@ async def run_benchmark_cli(args):
     print(f"\nDetailed results saved to: {results['config']['output']['output_dir']}")
     print("="*60)
     
+    return 0
+
+
+async def rerun_failed_cli(args):
+    """Rerun only failed cases from a previous benchmark run."""
+
+    logger.info(f"Rerunning failed cases with config: {args.config}")
+    config = BenchmarkConfig.from_yaml(args.config)
+
+    summary = await rerun_failed_cases(
+        config,
+        cases_dir=args.cases_dir,
+        keep_history=args.keep_history,
+        dry_run=args.dry_run,
+        verbose=args.verbose,
+    )
+
+    print("\n" + "=" * 60)
+    print("FAILED CASE RERUN SUMMARY")
+    print("=" * 60)
+    print(f"Config: {summary['config']['dataset']['name']}")
+    print(f"Case directory: {summary['case_results_dir']}")
+    print(f"Initial failed indices: {summary['initial_failed_indices']}")
+    print(f"Failed indices rerun: {summary['rerun_indices']}")
+    print(f"Remaining failures: {summary['remaining_failures']}")
+    accuracy = summary.get('accuracy')
+    f1 = summary.get('macro_f1')
+    print(f"Accuracy: {accuracy:.3f}" if accuracy is not None else "Accuracy: N/A")
+    print(f"Macro F1: {f1:.3f}" if f1 is not None else "Macro F1: N/A")
+    print(f"Detailed results: {summary['detailed_results_path']}")
+    metrics_path = summary.get('metrics_report_path')
+    if metrics_path:
+        print(f"Metrics report: {metrics_path}")
+    detailed_results_path = Path(summary['detailed_results_path'])
+    summary_path = summary.get('summary_path')
+    if summary_path:
+        print(f"Summary file: {summary_path}")
+    else:
+        summary_file_name = detailed_results_path.name.replace('results', 'summary')
+        fallback_summary_path = Path(summary['output_dir']) / summary_file_name
+        print(f"Summary file: {fallback_summary_path}")
+    print("=" * 60 + "\n")
+
     return 0
 
 
@@ -286,11 +364,16 @@ def main():
     
     # Configure logging
     logger.remove()  # Remove default handler
-    logger.add(sys.stderr, level="INFO" if args.command == 'run' and getattr(args, 'verbose', False) else "WARNING")
+    verbose = getattr(args, 'verbose', False)
+    info_commands = {'run', 'rerun-failed'}
+    level = "INFO" if (args.command in info_commands and verbose) else "WARNING"
+    logger.add(sys.stderr, level=level)
     
     try:
         if args.command == 'run':
             return asyncio.run(run_benchmark_cli(args))
+        elif args.command == 'rerun-failed':
+            return asyncio.run(rerun_failed_cli(args))
         elif args.command == 'create-dataset':
             return create_dataset_cli(args)
         elif args.command == 'generate-config':

@@ -27,14 +27,18 @@ class FormatAgent(BaseAgent):
     system_prompt = (
         "ROLE: Diagnostic output formatter for benchmark evaluation.\n"
         "GOAL: Extract and standardize the final diagnosis from agent outputs.\n"
-        "INPUTS: Complete diagnostic workflow outputs including diagnoses, reasoning, and analysis.\n"
-        "OUTPUT: Single standardized diagnosis in format 'The diagnosis of this image is [DIAGNOSIS]'.\n"
-        "CONSTRAINTS: \n"
-        "- Extract the most confident/primary diagnosis\n"
-        "- Use exact disease names from the provided class list\n"
-        "- If multiple diagnoses exist, choose the one with highest confidence\n"
-        "- If no clear diagnosis, output 'The diagnosis of this image is Normal'\n"
-        "- Only output the required format, no additional text or explanation"
+        "INPUTS: Complete diagnostic workflow outputs including diagnoses, reasoning, analysis.\n"
+        "OUTPUT: Exactly one line: 'The diagnosis of this image is [DIAGNOSIS]'.\n"
+        "HARD CONSTRAINTS (strict):\n"
+        "1) [DIAGNOSIS] MUST be chosen from the provided VALID DIAGNOSES list (exact token match).\n"
+        "2) Output MUST contain no extra text, punctuation, JSON, quotes, or explanations.\n"
+        "3) If no class fits, choose 'Normal' (must be in the list).\n"
+        "4) Prefer the most confident/primary diagnosis if multiple are present.\n"
+        "5) If upstream outputs are negative for a disease family (e.g., 'no diabetic retinopathy'), map to 'Normal' unless a positive class from the VALID DIAGNOSES is clearly indicated.\n"
+        "EXAMPLES (format only):\n"
+        "The diagnosis of this image is Normal\n"
+        "The diagnosis of this image is central serous retinopathy\n"
+        "DO NOT: output probabilities, multiple labels, explanations, or non-listed synonyms."
     )
     
     capabilities = {
@@ -54,24 +58,71 @@ class FormatAgent(BaseAgent):
         self.system_prompt += f"\nVALID DIAGNOSES: {class_list}"
     
     async def a_run(self, context: Dict[str, Any]) -> Dict[str, Any]:
-        """Extract and format the primary diagnosis."""
-        
-        # Get the final diagnostic output
+        """Always use LLM over conversation history to generate single-label conclusion."""
+
+        # Collect final fragment and conversation transcript
         final_fragment = context.get("final_fragment", {})
-        
-        # Extract diagnosis using multiple strategies
-        diagnosis = self._extract_diagnosis(final_fragment)
-        
-        # Format the output
+        convo_text = self._load_conversation_text_safe()
+        # Also collect a compact summary of tool calls from trace.json, so LLM can see raw tool outputs
+        tools_text, tools_struct = self._load_tools_summary_safe()
+        try:
+            ff_snippet = json.dumps(final_fragment, ensure_ascii=False)
+        except Exception:
+            ff_snippet = str(final_fragment)
+
+        # Prepare VALID list and emit debug inputs (system prompt + messages used)
+        valid = ", ".join(self.class_names)
+        self._emit_debug_inputs(convo_text=convo_text, final_fragment_snippet=ff_snippet, valid_list=valid, tools_summary=tools_text)
+
+        # Dry-run or LLM missing: deterministically return Normal without heuristic extraction
+        if os.getenv("EYEAGENT_DRY_RUN", "0").lower() in ("1", "true", "yes") or self.llm is None:
+            diagnosis = self._clamp_to_valid("Normal")
+            formatted_output = f"The diagnosis of this image is {diagnosis}"
+            reasoning = "Dry-run/LLM-unavailable; returned 'Normal' without heuristic extraction (LLM-only policy)."
+            outputs = {
+                "formatted_diagnosis": formatted_output,
+                "extracted_diagnosis": diagnosis,
+                "confidence": 0.5,
+                "reasoning": reasoning,
+            }
+            self.trace_logger.append_event(self.case_id, {
+                "type": "agent_step",
+                "agent": self.name,
+                "role": self.role,
+                "outputs": outputs,
+                "tool_calls": [],
+                "reasoning": reasoning,
+            })
+            return {"agent": self.name, "role": self.role, "outputs": outputs, "tool_calls": [], "reasoning": reasoning}
+
+        prompt = (
+            self.system_prompt
+            + "\n\nVALID DIAGNOSES: " + valid
+            + "\n\nConversation history (most recent last):\n" + (convo_text or "<empty>")
+            + "\n\nFinal fragment JSON:\n" + ff_snippet
+            + "\n\nTool calls summary (compact):\n" + (tools_text or "<none>")
+            + "\n\nAnswer with exactly one line as specified."
+        )
+
+        try:
+            response = self.llm.invoke(prompt)
+            raw = getattr(response, "content", None) if response is not None else None
+            line = (raw or "").strip().splitlines()[0] if raw else ""
+        except Exception as e:
+            logger.warning(f"LLM inference failed in FormatAgent: {e}")
+            line = "The diagnosis of this image is Normal"
+
+        # Parse and clamp to valid class list
+        extracted = self._parse_output_line(line)
+        diagnosis = self._clamp_to_valid(extracted)
         formatted_output = f"The diagnosis of this image is {diagnosis}"
-        
-        # Create reasoning for transparency
-        reasoning = f"Extracted diagnosis '{diagnosis}' from final diagnostic output and formatted for evaluation."
+        reasoning = "LLM-based synthesis over conversation and final fragment; output clamped to valid classes."
         
         outputs = {
             "formatted_diagnosis": formatted_output,
             "extracted_diagnosis": diagnosis,
-            "confidence": self._extract_confidence(final_fragment),
+            # Prefer confidence extracted from tool calls if available
+            "confidence": self._extract_confidence(final_fragment, tools_struct),
             "reasoning": reasoning
         }
         
@@ -92,6 +143,204 @@ class FormatAgent(BaseAgent):
             "tool_calls": [],
             "reasoning": reasoning
         }
+
+    def _load_conversation_text_safe(self) -> str:
+        """Load conversation.jsonl to a compact transcript string."""
+        try:
+            from eyeagent.tracing.trace_logger import TraceLogger  # for type reference only
+            path = self.trace_logger.get_conversation_path(self.case_id)
+            if not path or not os.path.exists(path):
+                return ""
+            lines: List[str] = []
+            with open(path, "r", encoding="utf-8") as f:
+                for i, ln in enumerate(f):
+                    if i > 4000:
+                        break
+                    try:
+                        rec = json.loads(ln.strip())
+                        role = rec.get("role") or "assistant"
+                        content = str(rec.get("content") or "").strip()
+                        if content:
+                            lines.append(f"[{role}] {content}")
+                    except Exception:
+                        continue
+            transcript = "\n".join(lines)
+            return transcript[-40000:]
+        except Exception:
+            return ""
+
+    def _load_tools_summary_safe(self) -> tuple[str, Dict[str, Any]]:
+        """Load recent tool_calls from trace.json and build a compact human-readable summary and a structured dict.
+
+        Returns: (summary_text, structured_summary)
+        structured_summary keys:
+          - modality: Optional[str]
+          - laterality: Optional[str]
+          - screening: Dict[str, float]  # e.g., classification:multidis probabilities (top few)
+          - specialist: List[Dict[str, Any]]  # per call: {tool_id, image_id, predicted_label|grade, predicted_prob|confidence, disease}
+          - misc: List[Dict[str, Any]]  # other notable tool outputs
+        """
+        try:
+            from eyeagent.tracing.trace_logger import TraceLogger  # import here to avoid cycles at import time
+            doc: Dict[str, Any] = self.trace_logger.load_trace(self.case_id)  # type: ignore[attr-defined]
+        except Exception:
+            return "", {}
+
+        events = list(doc.get("events") or [])
+        tool_calls: List[Dict[str, Any]] = []
+        # Prefer the tool_calls array attached to the latest agent_step from UnifiedAgent (or any agent_step)
+        for ev in reversed(events):
+            if isinstance(ev, dict) and ev.get("type") == "agent_step":
+                arr = ev.get("tool_calls")
+                if isinstance(arr, list) and arr:
+                    tool_calls = arr
+                    break
+        # Fallback: collect the last ~200 explicit tool_call events
+        if not tool_calls:
+            for ev in reversed(events):
+                if isinstance(ev, dict) and ev.get("type") == "tool_call":
+                    # Normalize format to match agent_step.tool_calls entries
+                    tc = {
+                        "tool_id": ev.get("tool_id"),
+                        "arguments": ev.get("arguments"),
+                        "output": ev.get("output"),
+                        "status": ev.get("status"),
+                        "version": ev.get("version"),
+                        "mcp_meta": ev.get("mcp_meta"),
+                        "image_id": (ev.get("arguments") or {}).get("image_path"),
+                    }
+                    tool_calls.append(tc)
+                    if len(tool_calls) >= 200:
+                        break
+            tool_calls.reverse()
+
+        # Build structured summary
+        summary: Dict[str, Any] = {"modality": None, "laterality": None, "screening": {}, "specialist": [], "misc": []}
+        def _flt(x: Any) -> Optional[float]:
+            try:
+                return float(x)
+            except Exception:
+                return None
+        # Collate
+        for tc in tool_calls:
+            tid = tc.get("tool_id")
+            out = tc.get("output") or {}
+            if not isinstance(tid, str):
+                continue
+            if tid == "classification:modality" and isinstance(out, dict):
+                lab = out.get("label") or out.get("prediction")
+                if isinstance(lab, str):
+                    summary["modality"] = lab
+                continue
+            if tid == "classification:laterality" and isinstance(out, dict):
+                lab = out.get("label") or out.get("prediction")
+                if isinstance(lab, str):
+                    summary["laterality"] = lab
+                continue
+            if tid == "classification:multidis" and isinstance(out, dict):
+                probs = out.get("probabilities") if isinstance(out.get("probabilities"), dict) else out
+                if isinstance(probs, dict):
+                    # take top 8
+                    try:
+                        items = sorted([(k, float(v)) for k, v in probs.items() if v is not None], key=lambda kv: kv[1], reverse=True)[:8]
+                        summary["screening"] = {k: v for k, v in items}
+                    except Exception:
+                        pass
+                continue
+            if tid.startswith("disease_specific_cls:") and isinstance(out, dict):
+                disease_key = tid.split(":", 1)[-1]
+                pred_label = out.get("predicted_label") or out.get("label") or out.get("prediction") or out.get("grade")
+                prob = _flt(out.get("predicted_prob"))
+                if prob is None:
+                    # Optionally derive from probabilities map
+                    probs_map = out.get("probabilities")
+                    if isinstance(probs_map, dict):
+                        try:
+                            # choose positive class if available
+                            pos = None
+                            if pred_label and pred_label in probs_map:
+                                pos = _flt(probs_map.get(pred_label))
+                            if pos is None:
+                                pos = max((_flt(v) or 0.0) for v in probs_map.values())
+                            prob = float(pos)
+                        except Exception:
+                            prob = None
+                summary["specialist"].append({
+                    "tool_id": tid,
+                    "image_id": tc.get("image_id"),
+                    "disease": disease_key,
+                    "predicted_label": pred_label,
+                    "predicted_prob": prob,
+                })
+                continue
+            # capture a few other outputs that may be useful
+            if tid.startswith("classification:") and isinstance(out, dict):
+                summary["misc"].append({"tool": tid, "output": {k: out.get(k) for k in ("prediction", "label", "unit") if k in out}})
+
+        # Turn into a readable text block
+        lines: List[str] = []
+        if summary.get("modality"):
+            lines.append(f"modality: {summary['modality']}")
+        if summary.get("laterality"):
+            lines.append(f"laterality: {summary['laterality']}")
+        if isinstance(summary.get("screening"), dict) and summary["screening"]:
+            # e.g. DR:0.92, AMD:0.88
+            top_line = ", ".join([f"{k}:{v:.3f}" for k, v in summary["screening"].items()])
+            lines.append(f"screening(top): {top_line}")
+        # specialist compact lines
+        sp: List[Dict[str, Any]] = summary.get("specialist") or []
+        # sort by prob desc if available
+        try:
+            sp = sorted(sp, key=lambda d: (d.get("predicted_prob") is not None, d.get("predicted_prob") or 0.0), reverse=True)
+        except Exception:
+            pass
+        for ent in sp[:32]:  # cap lines
+            d = ent.get("disease")
+            pl = ent.get("predicted_label")
+            pp = ent.get("predicted_prob")
+            if pp is not None and pl:
+                lines.append(f"{d}: {pl} ({pp:.3f})")
+            elif pp is not None:
+                lines.append(f"{d}: {pp:.3f}")
+            elif pl:
+                lines.append(f"{d}: {pl}")
+            else:
+                lines.append(f"{d}")
+        text = "\n".join(lines)
+        # Trim overly long text
+        if len(text) > 4000:
+            text = text[:4000] + "..."
+        return text, summary
+        
+
+    def _parse_output_line(self, line: str) -> str:
+        """Extract label from 'The diagnosis of this image is X' or use line content."""
+        if not isinstance(line, str):
+            return "Normal"
+        m = re.search(r"The diagnosis of this image is\s+(.+)$", line.strip(), re.IGNORECASE)
+        if m:
+            return m.group(1).strip()
+        return line.strip().strip("\"'")
+
+    def _clamp_to_valid(self, diagnosis: str) -> str:
+        """Map arbitrary string to nearest valid class name; default Normal."""
+        if not isinstance(diagnosis, str) or not self.class_names:
+            return "Normal"
+        guess = diagnosis.strip()
+        # exact
+        for c in self.class_names:
+            if guess == c:
+                return c
+        # case-insensitive exact
+        for c in self.class_names:
+            if guess.lower() == c.lower():
+                return c
+        # substring match (prefer non-Normal)
+        non_norm = [c for c in self.class_names if c.lower() != "normal"]
+        for c in non_norm:
+            if guess.lower() in c.lower() or c.lower() in guess.lower():
+                return c
+        return "Normal"
     
     def _extract_diagnosis(self, final_fragment: Dict[str, Any]) -> str:
         """Extract the primary diagnosis from the final diagnostic output."""
@@ -266,7 +515,7 @@ class FormatAgent(BaseAgent):
         
         return "Normal"
     
-    def _extract_confidence(self, final_fragment: Dict[str, Any]) -> float:
+    def _extract_confidence(self, final_fragment: Dict[str, Any], tools_struct: Optional[Dict[str, Any]] = None) -> float:
         """Extract confidence score if available."""
         # Look for confidence in various places
         confidence_fields = ["confidence", "probability", "score"]
@@ -290,8 +539,62 @@ class FormatAgent(BaseAgent):
                                 return float(primary[field])
                             except (ValueError, TypeError):
                                 continue
-        
+        # Otherwise, consider tool_calls summary (e.g., highest predicted_prob among specialist outputs)
+        try:
+            sp = ((tools_struct or {}).get("specialist") or [])
+            vals = [float(x.get("predicted_prob")) for x in sp if x.get("predicted_prob") is not None]
+            if vals:
+                return max(vals)
+        except Exception:
+            pass
         return 0.5  # Default confidence
+
+    def _emit_debug_inputs(self, convo_text: str, final_fragment_snippet: str, valid_list: str, tools_summary: Optional[str] = None) -> None:
+        """Log the FormatAgent system prompt and the messages it reads for transparency."""
+        try:
+            # Build full system prompt string
+            sys_prompt_full = f"{self.system_prompt}\n\nVALID DIAGNOSES: {valid_list}"
+            # Limit sizes to avoid huge logs
+            convo_excerpt = (convo_text or "").strip()
+            if len(convo_excerpt) > 8000:
+                convo_excerpt = "..." + convo_excerpt[-8000:]
+            ff_preview = (final_fragment_snippet or "").strip()
+            if len(ff_preview) > 4000:
+                ff_preview = ff_preview[:4000] + "..."
+            tools_preview = (tools_summary or "").strip()
+            if len(tools_preview) > 4000:
+                tools_preview = tools_preview[:4000] + "..."
+
+            # Resolve conversation file path if available
+            conv_path = None
+            try:
+                conv_path = self.trace_logger.get_conversation_path(self.case_id)
+            except Exception:
+                conv_path = None
+
+            # Log via logger
+            logger.info(
+                "[FormatAgent Debug] case_id={}\nSystem Prompt:\n{}\n\nConversation file: {}\nConversation excerpt (tail):\n{}\n\nFinal fragment preview:\n{}\n\nTool calls summary (compact):\n{}",
+                self.case_id,
+                sys_prompt_full,
+                conv_path or "<unknown>",
+                convo_excerpt,
+                ff_preview,
+                tools_preview,
+            )
+
+            # Persist into trace events
+            self.trace_logger.append_event(self.case_id, {
+                "type": "format_agent_debug",
+                "agent": self.name,
+                "system_prompt": sys_prompt_full,
+                "conversation_file": conv_path,
+                "conversation_excerpt_tail": convo_excerpt,
+                "final_fragment_preview": ff_preview,
+                "tools_summary_preview": tools_preview,
+            })
+        except Exception as e:
+            logger.warning(f"Failed to emit FormatAgent debug inputs: {e}")
 
 
 def format_diagnosis_for_evaluation(diagnostic_output: Dict[str, Any], 
@@ -308,14 +611,27 @@ def format_diagnosis_for_evaluation(diagnostic_output: Dict[str, Any],
     """
     from eyeagent.tracing.trace_logger import TraceLogger
     
-    # Create a temporary format agent
+    # Create a temporary format agent (no conversation available here)
     trace_logger = TraceLogger()
-    format_agent = FormatAgent("", trace_logger, "temp", class_names)
-    
-    # Create context with final fragment
-    context = {"final_fragment": diagnostic_output}
-    
-    # Extract diagnosis
-    result = format_agent._extract_diagnosis(diagnostic_output)
-    
-    return f"The diagnosis of this image is {result}"
+    fmt = FormatAgent("", trace_logger, "temp", class_names)
+    # LLM path if available; else Normal
+    if os.getenv("EYEAGENT_DRY_RUN", "0").lower() in ("1", "true", "yes") or fmt.llm is None:
+        diag = fmt._clamp_to_valid("Normal")
+        return f"The diagnosis of this image is {diag}"
+    try:
+        valid = ", ".join(fmt.class_names)
+        ff = json.dumps(diagnostic_output, ensure_ascii=False)
+        prompt = (
+            fmt.system_prompt
+            + "\n\nVALID DIAGNOSES: " + valid
+            + "\n\nFinal fragment JSON:\n" + ff
+            + "\n\nAnswer with exactly one line as specified."
+        )
+        resp = fmt.llm.invoke(prompt)
+        raw = getattr(resp, "content", None) if resp is not None else None
+        line = (raw or "").strip().splitlines()[0] if raw else ""
+        extracted = fmt._parse_output_line(line)
+        diag = fmt._clamp_to_valid(extracted)
+        return f"The diagnosis of this image is {diag}"
+    except Exception:
+        return "The diagnosis of this image is Normal"

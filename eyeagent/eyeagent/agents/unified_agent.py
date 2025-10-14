@@ -54,9 +54,8 @@ class UnifiedAgent(DiagnosticBaseAgent):
 
     async def a_run(self, context: Dict[str, Any]) -> Dict[str, Any]:
         images = context.get("images", [])
-        # Resolve allowed tools via config for UnifiedAgent
-        all_ids = self._all_tool_ids()
-        allowed = filter_tool_ids(self.__class__.__name__, all_ids)
+        # UnifiedAgent uses ALL tools; do not apply config-based filters here
+        allowed = self._all_tool_ids()
 
         tool_calls: List[Dict[str, Any]] = []
         modality_label: Optional[str] = None

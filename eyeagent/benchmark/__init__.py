@@ -21,6 +21,7 @@ from .config import (
     ModelConfig,
     MetricsConfig,
     OutputConfig,
+    RunnerConfig,
 )
 
 __all__ = [
@@ -33,6 +34,7 @@ __all__ = [
     "ModelConfig",
     "MetricsConfig",
     "OutputConfig",
+    "RunnerConfig",
     "run_benchmark_from_config",
     "run_benchmark_sync",
 ]

@@ -29,7 +29,7 @@ eyeagent/benchmark/
 
 ```python
 import asyncio
-from eyeagent.benchmark import BenchmarkConfig, BenchmarkRunner
+from eyeagent.benchmark import BenchmarkConfig, BenchmarkRunner, RunnerConfig
 from eyeagent.benchmark.config import DatasetConfig
 
 # 创建配置
@@ -39,8 +39,9 @@ config = BenchmarkConfig(
         path="./data/classification_dataset.csv",
         image_column="image_path",
         label_column="diagnosis",
-        class_names=["Normal", "DR", "AMD", "Glaucoma"]
-    )
+    class_names=["Normal", "DR", "AMD", "Glaucoma"]
+  ),
+  runner=RunnerConfig(concurrency=4, skip_existing_results=True)
 )
 
 # 运行 benchmark
@@ -57,6 +58,9 @@ print(f"F1分数: {results['metrics']['f1_score']:.3f}")
 from eyeagent.benchmark import run_benchmark_from_config
 
 # 从 YAML 配置文件运行
+results = await run_benchmark_from_config("config/benchmark.yaml")
+```
+
 - 每个样本的 trace 会单独保存在 `cases/<case_id>/trace.json`，而 benchmark 还会在 `case_results/` 目录实时输出精简版结果，方便随时查看。
 
 ```bash
@@ -65,6 +69,10 @@ python eyeagent/benchmark/cli.py run --dataset ./data/test.csv --classes Normal 
 
 # 使用配置文件运行
 python eyeagent/benchmark/cli.py run --config examples/basic_benchmark.yaml
+
+# 调整并发数和强制重新计算
+python eyeagent/benchmark/cli.py run --config examples/basic_benchmark.yaml --concurrency 8
+python eyeagent/benchmark/cli.py run --config examples/basic_benchmark.yaml --force-rerun
 
 # 创建示例数据集
 python eyeagent/benchmark/cli.py create-dataset --output ./sample_data/test.csv --samples 20
@@ -155,7 +163,14 @@ output:
   save_predictions: true
   save_confusion_matrix: true
   verbose: true
+
+runner:
+  concurrency: 4
+  skip_existing_results: true
 ```
+
+- `concurrency` 控制同时运行的样本数量，设置为 `0` 时会自动根据 CPU 核心数选择合适的并发度。
+- `skip_existing_results` 为 `true` 时，Runner 会基于配置指纹而不是文件名进行匹配，只要内容一致，即使缓存文件名带有时间戳也能被识别并复用，大幅减少重复测试时间。
 
 ## 📈 输出结果
 
@@ -251,7 +266,9 @@ Diagnostic Workflow → FormatAgent → Standardized Output → Evaluation
 
 3. **性能优化**
    - 对于大型数据集考虑批处理
-   - 监控资源使用情况
+  - 合理设置 `runner.concurrency` 或通过 CLI 的 `--concurrency` 开启多线程评估
+  - 保持 `runner.skip_existing_results=true`，避免重复计算未变化的结果；缓存匹配依赖配置指纹而非文件名，可安全复用历史缓存
+  - 监控资源使用情况
    - 合理设置超时
 
 ## 🎯 使用场景

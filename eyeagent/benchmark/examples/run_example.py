@@ -11,15 +11,16 @@ from pathlib import Path
 # Add the parent directory to the path so we can import eyeagent
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-from eyeagent.benchmark import (
+from eyeagent.benchmark import (  # type: ignore[import]
     BenchmarkConfig, 
     BenchmarkRunner,
     DatasetConfig,
     ModelConfig,
     MetricsConfig,
-    OutputConfig
+    OutputConfig,
+    RunnerConfig,
 )
-from eyeagent.benchmark.dataset_loader import create_sample_dataset
+from eyeagent.benchmark.dataset_loader import create_sample_dataset  # type: ignore[import]
 
 
 async def run_example_benchmark():
@@ -53,6 +54,10 @@ async def run_example_benchmark():
         output=OutputConfig(
             output_dir="./example_results",
             verbose=True
+        ),
+        runner=RunnerConfig(
+            concurrency=2,
+            skip_existing_results=True,
         )
     )
     
@@ -61,6 +66,7 @@ async def run_example_benchmark():
     print(f"  Samples: {config.dataset.max_samples}")
     print(f"  Classes: {config.dataset.class_names}")
     print(f"  Dry run: {config.model.dry_run}")
+    print(f"  Concurrency: {config.runner.concurrency}")
     
     # Run benchmark
     print("\nRunning benchmark...")
@@ -97,7 +103,7 @@ async def run_config_based_benchmark():
     config_path = Path(__file__).parent / "basic_benchmark.yaml"
     
     # Update the config to use dry run and sample data
-    from eyeagent.benchmark import run_benchmark_from_config
+    from eyeagent.benchmark import run_benchmark_from_config  # type: ignore[import]
     
     try:
         results = await run_benchmark_from_config(str(config_path))
@@ -114,7 +120,7 @@ def demonstrate_metrics_calculation():
     
     print("\nDemonstrating metrics calculation...")
     
-    from eyeagent.benchmark.metrics import MetricsCalculator, MetricsConfig
+    from eyeagent.benchmark.metrics import MetricsCalculator, MetricsConfig  # type: ignore[import]
     
     # Sample predictions
     y_true = ["Normal", "DR", "AMD", "Normal", "Glaucoma", "DR", "Normal", "AMD"]
