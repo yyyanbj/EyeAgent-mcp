@@ -235,10 +235,19 @@ class MultimodalTool(ToolBase):
         try:
             import importlib.util as _ilu
             import sys as _sys
-            # prepare sys.path for local generation3d package tree
-            gen3d_root = Path(__file__).resolve().parents[3] / "langchain_tool_src/tools/generation3d"
-            if gen3d_root.exists() and str(gen3d_root) not in _sys.path:
-                _sys.path.insert(0, str(gen3d_root))
+            base_path = Path(__file__).resolve()
+            # prepare sys.path for local generation3d package tree (handle multiple repo layouts)
+            candidate_dirs = [
+                base_path.parent,  # tools/multimodal (local medical_diffusion copy)
+            ]
+            for cand in candidate_dirs:
+                try:
+                    if cand.exists():
+                        sp = str(cand)
+                        if sp not in _sys.path:
+                            _sys.path.insert(0, sp)
+                except Exception:
+                    continue
             # check key modules
             for mod in ("timm", "torch"):
                 if _ilu.find_spec(mod) is None:
@@ -256,12 +265,19 @@ class MultimodalTool(ToolBase):
         if self._encoder is not None:
             return
         import timm
+        import torch
+        from torch.serialization import add_safe_globals
+        try:
+            # allow argparse.Namespace if checkpoint saved via Lightning (PyTorch >=2.6 weights_only default True)
+            import argparse  # type: ignore
+            add_safe_globals([argparse.Namespace])
+        except Exception:
+            pass
         model = timm.create_model("vit_large_patch16_224", pretrained=False)
         # Try load weights
         ckpt_path = self.weights_root / "RETFound_cfp_weights.pth"
         if ckpt_path.exists():
-            import torch
-            state = torch.load(str(ckpt_path), map_location="cpu")
+            state = torch.load(str(ckpt_path), map_location="cpu", weights_only=False)
             sd = state.get("model") or state
             try:
                 model.load_state_dict(sd, strict=False)

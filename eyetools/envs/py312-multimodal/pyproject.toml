@@ -13,6 +13,11 @@ dependencies = [
   "pytorch-lightning",
   "einops",
   "pytorch-msssim",
+  "pyvista",
+  "pymeshlab",
+  "open3d",
+  "imageio",
+  "loguru",
   "tqdm",
 ]
 
