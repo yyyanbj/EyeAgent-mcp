@@ -2,6 +2,7 @@ profiles:
   default:
     steps:
       - name: orchestrator
+      - name: symptom_triage
       - name: image_analysis
       - name: specialist
       - name: knowledge

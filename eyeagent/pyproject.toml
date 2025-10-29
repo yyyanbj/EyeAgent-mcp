@@ -24,6 +24,8 @@ dependencies = [
     "scikit-learn>=1.7.2",
     "matplotlib>=3.10.6",
     "seaborn>=0.13.2",
+    "owlready2>=0.48",
+    "rdflib>=7.2.1",
 ]
 
 [project.optional-dependencies]

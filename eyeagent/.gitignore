@@ -32,4 +32,10 @@ logs/
 
 temp_cases_test/
 datasets/
+data/
 benchmark_results/
+
+database/
+benchmark/examples*
+benchmark/scripts*
+benchmark/diseases*

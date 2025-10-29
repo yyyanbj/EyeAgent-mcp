@@ -16,11 +16,11 @@ class OrchestratorAgent(DiagnosticBaseAgent):
     system_prompt = (
         "ROLE: Orchestrator/router. You never call tools.\n"
         "GOAL: Decide the next agent to run based on current state and preliminary results, and provide a planned pipeline.\n"
-        "REQUIRED ORDER (when images exist): preliminary → image_analysis → specialist → decision → follow_up → report (knowledge optional and usually integrated by follow_up).\n"
-        "INPUTS: patient, images, and prior agent outputs (preliminary/image_analysis/specialist/decision/knowledge/follow_up).\n"
+        "RECOMMENDED ORDER: symptom_triage (if symptom_text is available or needs collection) → preliminary → image_analysis → specialist → decision → follow_up → report (knowledge optional and usually integrated by follow_up). When images exist, preliminary and image_analysis should still precede specialist/decision.\n"
+        "INPUTS: patient, images, and prior agent outputs (symptom_triage/preliminary/image_analysis/specialist/decision/knowledge/follow_up).\n"
         "OUTPUTS: planned_pipeline (list of agent roles in intended order), next_agent (string).\n"
         "HEURISTICS: If no images → go directly to report. If OCT modality → IA uses OCT tools. If screening confidence is very low, you may skip specialist.\n"
-        "CONSTRAINTS: Do not invoke tools; only route among available/enabled agents. When images exist, never jump to report before running preliminary and image_analysis unless they are explicitly disabled. Re-evaluate after each step and finish with report."
+        "CONSTRAINTS: Do not invoke tools; only route among available/enabled agents. Prefer running 'symptom_triage' early if enabled and not completed. When images exist, never jump to report before running preliminary and image_analysis unless they are explicitly disabled. Re-evaluate after each step and finish with report."
     )
 
     capabilities = {
@@ -55,8 +55,9 @@ class OrchestratorAgent(DiagnosticBaseAgent):
         specialist = context.get("specialist")
         knowledge = context.get("knowledge")
         follow_up = context.get("follow_up")
+        triage = context.get("symptom_triage")
         configured = get_configured_agents()
-        known = ["preliminary", "image_analysis", "specialist", "decision", "knowledge", "follow_up", "report"]
+        known = ["symptom_triage", "preliminary", "image_analysis", "specialist", "decision", "knowledge", "follow_up", "report"]
         if configured:
             enabled_roles = {k for k, v in configured.items() if isinstance(v, dict) and (v.get("enabled") is not False)}
             available = [r for r in known if r in enabled_roles or r == "report"]
@@ -81,12 +82,14 @@ class OrchestratorAgent(DiagnosticBaseAgent):
         if context.get("decision"): completed.append("decision")
         if knowledge: completed.append("knowledge")
         if follow_up: completed.append("follow_up")
+        if triage: completed.append("symptom_triage")
 
         sys = (
             "You are the OrchestratorAgent (orchestrator). Route agents; do not call tools. "
             "Return ONLY JSON following the exact schema. Rules: "
-            "- Allowed roles: ['preliminary','image_analysis','specialist','decision','knowledge','follow_up','report']\n"
+            "- Allowed roles: ['symptom_triage','preliminary','image_analysis','specialist','decision','knowledge','follow_up','report']\n"
             "- Always include 'report' at the END of planned_pipeline exactly once\n"
+            "- Prefer 'symptom_triage' early when enabled and not completed\n"
             "- If images exist, do NOT jump to 'report' before 'preliminary' and 'image_analysis' unless they are disabled\n"
             "- next_agent must be one of allowed roles and normally the first incomplete in planned_pipeline\n"
         )
@@ -100,6 +103,7 @@ class OrchestratorAgent(DiagnosticBaseAgent):
             f"Context summary (decision): {_summarize(context.get('decision'))}\n"
             f"Context summary (knowledge): {_summarize(knowledge)}\n"
             f"Context summary (follow_up): {_summarize(follow_up)}\n"
+            f"Context summary (symptom_triage): {_summarize(triage)}\n"
         )
         llm = JsonLLM(agent_name=self.__class__.__name__)
         routing: RoutingDecision | None = None
@@ -133,8 +137,11 @@ class OrchestratorAgent(DiagnosticBaseAgent):
             if routing.routing_reasons:
                 reasons.extend(list(routing.routing_reasons)[:4])
 
-        # Hard guard: if images exist and prelim/IA are enabled+in plan, they must come first if incomplete
-        if images and planned_pipeline:
+        # Prefer symptom triage first if enabled and not completed
+        if planned_pipeline and ("symptom_triage" in planned_pipeline) and ("symptom_triage" not in completed):
+            next_agent = "symptom_triage"
+        # Hard guard: when images exist, prelim/IA must precede specialist/decision
+        elif images and planned_pipeline:
             for must in ("preliminary", "image_analysis"):
                 if must in planned_pipeline and must not in completed:
                     next_agent = must
@@ -169,6 +176,14 @@ class OrchestratorAgent(DiagnosticBaseAgent):
             "routing_reasons": reasons,
             "images_count": (len(images) if isinstance(images, list) else 0),
         }
+        # Embed a short intake prompt when symptom text is missing and triage is available
+        sym_text = (context.get("symptom_text") or "").strip()
+        if (not sym_text) and ("symptom_triage" in available):
+            outputs["symptom_prompt"] = (
+                "Please briefly describe your main eye symptoms in English (1-3 sentences). "
+                "Include: onset/duration, laterality (one eye or both), and key descriptors (e.g., blurred vision, pain, redness, flashes/floaters, central black spot)."
+            )
+            reasons.append("Collect symptom_text for triage")
         reasoning = "; ".join(reasons) if reasons else f"Next agent: {next_agent} (LLM-guided)"
 
         self.trace_logger.append_event(self.case_id, {

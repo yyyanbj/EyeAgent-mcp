@@ -42,6 +42,10 @@ DEFAULT_SETTINGS: Dict[str, Any] = {
             "class": "eyeagent.agents.unified_agent.UnifiedAgent",
             "enabled": True,
         },
+        "symptom_triage": {
+            "class": "eyeagent.agents.symptom_triage_agent.SymptomTriageAgent",
+            "enabled": True,
+        },
         "preliminary": {
             "class": "eyeagent.agents.preliminary_agent.PreliminaryAgent",
             "enabled": True,
