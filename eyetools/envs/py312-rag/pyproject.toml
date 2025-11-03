@@ -11,12 +11,17 @@ dependencies = [
   "langchain-core>=0.3.0",
   "langchain-openai>=0.2.0",
   "langchain-qdrant>=0.2.0",
+  "langchain-community",
+  "langchain-huggingface",
   "qdrant-client>=1.11.0",
   "fastembed>=0.3.1",
   "pdfminer.six>=20231228",
   # Optional but useful
   "httpx>=0.28.1",
   "pyyaml",
+  "sentence-transformers",
+  "faiss-cpu",
+  "pypdf"
 ]
 
 [tool.uv]

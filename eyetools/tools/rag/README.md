@@ -1,6 +1,10 @@
 # RAG Tool (rag:query)
 
-Lightweight local RAG over markdown/txt sources. Uses simple token scoring to return top‑k snippets.
+Lightweight local RAG over markdown/txt/PDF sources with three retrieval modes:
+
+- local: keyword/BM25-like scoring (no vector dependencies)
+- qdrant: hybrid vector search (dense + sparse) using local Qdrant
+- faiss: local FAISS vector store built from PDFs with (book title, page) metadata
 
 ## Tool IDs
 - rag:query
@@ -11,71 +15,91 @@ Lightweight local RAG over markdown/txt sources. Uses simple token scoring to re
 
 ## Configuration
 
-RAG 会从一组语料目录中读取文本文件（.md/.txt/.rst/.py/.yml/.yaml），切分并建立轻量索引。
+The tool reads a set of corpus directories for files (.md/.txt/.rst/.py/.yml/.yaml) and PDFs, chunks them, and builds an index.
 
-优先级（高→低）：
-1. 环境变量 `EYETOOLS_RAG_DIRS`（使用冒号分隔多个路径，例如 `/data/docs:/opt/notes`）
-2. 本包 `config.yaml` 中 `variants[].params.corpus_dirs`
+Priority of corpus configuration (high → low):
+1. Environment variable `EYETOOLS_RAG_DIRS` (use colon to separate multiple paths, e.g. `/data/docs:/opt/notes`)
+2. `config.yaml` → `variants[].params.corpus_dirs`
 
-注意：相对路径会相对工具包根目录（本目录）解析，因此无需依赖服务的当前工作目录（CWD）。
+Note: Relative paths are resolved against the tool root (this folder), not the service CWD.
 
-### 独立运行环境（不修改 eyetools 依赖）
+### Isolated runtime environment
 
-本工具已配置为在独立环境下运行：`envs/py312-rag/pyproject.toml`，并且 `config.yaml` 中指定了：
+This tool is configured to run in an isolated environment: `envs/py312-rag/pyproject.toml`. In `config.yaml` it sets:
 
 - `shared.environment_ref: py312-rag`
 - `runtime.load_mode: subprocess`
 
-服务会通过 `uv run` 在子进程中按该环境的依赖列表（如 LangChain/Qdrant 等）执行工具，不会污染 `eyetools` 主项目依赖。
+The service launches the tool via `uv run` in a subprocess using that environment, so dependencies (LangChain/Qdrant/FAISS) will not pollute the main project.
 
-要求：系统可用的 Python 3.12 解释器（`python3.12`）。如果你的系统没有该解释器，请先安装，或在 `envs/py312-rag/pyproject.toml` 中调整 `requires-python`，并确保系统存在对应版本的解释器。
+Requirement: a system Python 3.12 interpreter (`python3.12`). If not available, install it or adjust `requires-python` in `envs/py312-rag/pyproject.toml` to match your system.
 
-如需添加/固定 RAG 相关依赖，请修改 `envs/py312-rag/pyproject.toml` 的 `dependencies` 列表；无需修改 `eyetools/pyproject.toml`。
+To add/pin RAG dependencies, modify `envs/py312-rag/pyproject.toml` dependencies. No need to change `eyetools/pyproject.toml`.
 
-## 参数说明（config.yaml → variants[].params）
+## Parameters (config.yaml → variants[].params)
 
-- mode: `qdrant` | `local`
-	- qdrant：默认推荐，向量+稀疏混合检索（需要 warmup 进行向量化与入库）
-	- local：轻量关键词匹配（无需额外依赖，功能较弱）
-- top_k: 返回条数
-- maxpages: 解析 PDF 的最大页数（控制 warmup 时长与存储量）
-- collection_name: Qdrant 集合名
-- vector_local_path: Qdrant 本地存储目录
-- doc_local_path: 原始文本切片的本地存储目录
-- chunk_size / chunk_overlap: 文本切片参数
+- mode: `qdrant` | `faiss` | `local`
+	- qdrant: hybrid dense+sparse retrieval (requires warmup to vectorize and ingest)
+	- faiss: local FAISS vector store (great for smaller PDF collections; requires warmup)
+	- local: keyword-only matching (no extra deps; limited semantics)
+- top_k: number of results to return
+- maxpages: maximum PDF pages to parse during warmup (caps warmup time and storage size)
+- collection_name: Qdrant collection name (qdrant mode)
+- vector_local_path: Qdrant local storage directory (qdrant mode)
+- doc_local_path: Document chunk local store (qdrant mode)
+- faiss_index_dir: FAISS index path (faiss mode)
+- embedding_model: HuggingFace embedding model (faiss mode)
+- bookmeta: `auto` (prefer PDF metadata title, fallback to filename) or `filename`
+- chunk_size / chunk_overlap: chunking configuration
 
-## 预热（warmup）与检索
+## Warmup and retrieval
 
-- warmup：在 `mode=qdrant` 时会执行以下步骤：
-	1. 扫描 `corpus_dirs`（支持 .pdf/.md/.txt 等），按 `maxpages` 限制抽取 PDF 文本
-	2. 依据 `chunk_size`/`chunk_overlap` 切片
-	3. 使用 FastEmbed 生成向量，并写入本地 Qdrant；同时将切片保存至 `doc_local_path`
-- predict：
-	- `mode=qdrant` 使用混合相似度检索，直接返回切片内容与来源
-	- `mode=local` 使用关键词匹配（BM25-like）
+- warmup:
+  - mode=qdrant: scans `corpus_dirs` (.pdf/.md/.txt/...), parses PDFs up to `maxpages`, chunks with `chunk_size`/`chunk_overlap`, embeds via FastEmbed, ingests into local Qdrant, and stores chunks into `doc_local_path`.
+  - mode=faiss: scans `corpus_dirs` for PDFs only, loads them per-page (preserving `book` and 1-based `page_number`), chunks preserving metadata, embeds via HuggingFace, builds a FAISS index, and saves it to `faiss_index_dir`.
+- predict:
+  - mode=qdrant: hybrid similarity search over vector store, returns chunks and sources
+  - mode=faiss: vector search over FAISS, returns chunks and sources, titles are formatted as `"<book> p.<page>"`
+  - mode=local: keyword/BM25-like matching
 
-## 启动服务（MCP）
+### Prebuilding FAISS index via CLI
 
-确保把 `eyetools/tools` 目录加入工具发现路径。例如：
+To reduce server startup latency, you can prebuild the FAISS index using the provided CLI:
 
 ```bash
-# 任选一项（等价）：
+# Example: build index from PDFs under one or more directories
+python eyetools/tools/rag/faiss_cli.py ingest \
+	--corpus-dir /abs/path/to/books \
+	--corpus-dir /abs/path/to/notes \
+	--index-dir  /abs/path/to/faiss_index \
+	--embedding-model BAAI/bge-small-zh-v1.5 \
+	--chunk-size 800 --chunk-overlap 120 \
+	--bookmeta auto --maxpages 600
+```
+
+Then set `mode: faiss` and the same `faiss_index_dir` in `config.yaml`. The server will reuse the existing index and skip building at startup.
+
+## Start service (MCP)
+
+Make sure `eyetools/tools` is included in tool discovery, e.g.:
+
+```bash
 export EYETOOLS_TOOL_PATHS="/home/you/EyeAgent-mcp/eyetools/tools"
-# 或在启动时传参（示例 CLI）
+# or via CLI arg
 eyetools-mcp serve --tools-dir /home/you/EyeAgent-mcp/eyetools/tools
 ```
 
-可选：设置语料目录（支持 PDF）
+Optional: set corpus directories (supports PDFs):
 
 ```bash
-export EYETOOLS_RAG_DIRS="/home/bingjie/workspace/EyeAgent-mcp/eyetools/weights/rag/books"
-
-提示：本工具已支持基础 PDF 文本抽取（依赖 pdfminer.six 已在 rag 独立环境中安装）。大体积 PDF 会限制读取页数以避免过长的预热时间。
+export EYETOOLS_RAG_DIRS="/path/to/books:/path/to/notes"
 ```
 
-## 直接调用（示例）
+Note: Basic PDF text extraction is supported (pdfminer.six is included in the isolated rag environment). Warmup time is bounded by `maxpages`.
 
-HTTP（简化示例，具体以服务实际路由为准）：
+## Direct invocation (example)
+
+HTTP (simplified example, actual routes may vary):
 
 POST /predict
 ```json
@@ -85,7 +109,7 @@ POST /predict
 }
 ```
 
-返回：
+Response:
 ```json
 {
 	"output": {
@@ -97,16 +121,16 @@ POST /predict
 }
 ```
 
-## 常见问题（Troubleshooting）
+## Troubleshooting
 
-- 工具未被发现：
-	- 检查是否设置了 `--tools-dir` 或 `EYETOOLS_TOOL_PATHS` 指向 `eyetools/tools`。
-	- 访问 `/tools` 或 `/mcp/tools` 确认是否存在 `rag:query`。
+- Tool not discovered:
+  - Ensure `--tools-dir` or `EYETOOLS_TOOL_PATHS` includes `eyetools/tools`.
+  - Check `/tools` or `/mcp/tools` to see if `rag:query` is listed.
 
-- 调用成功但 items 为空：
-	- 确认 `EYETOOLS_RAG_DIRS` 或 `config.yaml` 中的 `corpus_dirs` 是否指向真实存在的目录/文件。
-	- 检查查询关键词是否确实出现在语料文件中（检索为简单关键词匹配，语义不匹配会无结果）。
-	- 可先调用 `/admin/warmup?tool_id=rag:query` 触发预构建索引。
+- Invocation works but items are empty:
+  - Verify `EYETOOLS_RAG_DIRS` or `config.yaml` `corpus_dirs` points to real directories/files.
+  - For local mode, ensure the query terms actually appear in the corpus (keyword match only).
+  - For vector modes (`qdrant`, `faiss`), call `/admin/warmup?tool_id=rag:query` first to build the index.
 
-- 路由不一致（/ 与 /mcp）：
-	- 设置 `EYETOOLS_MCP_MOUNT_PATH=/mcp` 以与客户端一致。
+- Route differences (/ vs /mcp):
+  - Set `EYETOOLS_MCP_MOUNT_PATH=/mcp` to align with the client.

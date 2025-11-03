@@ -23,7 +23,7 @@ shared:
       inference_time: number
   model_defaults:
     precision: auto
-    lazy: true
+    lazy: false
 variants:
   - variant: query
     version: 0.1.0
@@ -31,13 +31,21 @@ variants:
     params:
       top_k: 5
       # Max PDF pages to extract during indexing/warmup (to cap warmup time)
-      maxpages: 300
-      # Retrieval mode: "qdrant" for hybrid vector search (recommended) or "local" for simple keyword matching
-      mode: qdrant
+      maxpages: 600
+      # Retrieval mode:
+      #   - "qdrant": hybrid vector search (recommended for large corpora)
+      #   - "faiss": local FAISS vector store (good for smaller, self-contained corpora like PDFs)
+      #   - "local": simple keyword matching (no vector deps)
+      mode: faiss
       # Vector store settings (paths are resolved relative to tool root if not absolute)
       collection_name: rag_collection
       vector_local_path: ../../temp/rag/qdrant
       doc_local_path: ../../temp/rag/docstore
+      # FAISS settings (used when mode=faiss)
+      faiss_index_dir: ../../temp/rag/faiss_index
+      embedding_model: BAAI/bge-m3 # BAAI/bge-small-zh-v1.5
+      # PDF book title metadata source: "auto" uses PDF metadata with filename fallback; "filename" uses filename only
+      bookmeta: auto
       # Chunking for ingestion
       chunk_size: 800
       chunk_overlap: 120
@@ -47,6 +55,7 @@ variants:
 metadata:
   authors: ["EyeAgent Team"]
   license: Apache-2.0
-  description: Lightweight local RAG query over markdown/txt files.
+  description: Lightweight local RAG query over markdown/txt/PDF files with optional Qdrant or FAISS vector search.
 notes:
   - 0.1.0 initial rag:query tool
+  - 0.2.0 add FAISS mode and PDF per-page ingestion with (book, page) metadata

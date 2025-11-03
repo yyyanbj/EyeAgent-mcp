@@ -8,6 +8,7 @@ from typing import Any, Dict, List, Tuple, Optional
 import hashlib
 import sys
 import importlib.util
+from loguru import logger
 
 
 def _read_text_file(path: Path, max_bytes: int = 2_000_000, pdf_max_pages: int | None = 300) -> str:
@@ -91,6 +92,7 @@ class RAGQueryTool:
         self.default_top_k = int(self.params.get("top_k", 5))
         self.corpus_dirs = self.params.get("corpus_dirs") or []
         # vector mode config
+        # Retrieval mode: "local" (keyword), "qdrant" (hybrid vector), or "faiss" (local vector)
         self.mode = str(self.params.get("mode", "local")).lower()
         self.collection_name = str(self.params.get("collection_name", "rag_collection"))
         self.vector_local_path = str(self.params.get("vector_local_path", "../../temp/rag/qdrant")).strip()
@@ -98,6 +100,11 @@ class RAGQueryTool:
         self.chunk_size = int(self.params.get("chunk_size", 800))
         self.chunk_overlap = int(self.params.get("chunk_overlap", 120))
         self._vector_ready = False
+        # FAISS (local vector) specific settings
+        self.faiss_index_dir = str(self.params.get("faiss_index_dir", "../../temp/rag/faiss_index")).strip()
+        self.embedding_model = str(self.params.get("embedding_model", "BAAI/bge-m3"))
+        self.bookmeta = str(self.params.get("bookmeta", "auto")).lower()  # "auto" | "filename"
+        self._faiss_ready = False
         # PDF page cap
         try:
             self.pdf_max_pages = int(self.params.get("maxpages", 300))
@@ -132,7 +139,6 @@ class RAGQueryTool:
             "schema": (meta.get("io") or {}).get("output_schema", {}),
             "fields": {
                 "items": "Top-k snippets with source and score",
-                "source": "rag",
                 "inference_time": "seconds",
             },
         }
@@ -145,7 +151,7 @@ class RAGQueryTool:
         if self._prepared:
             return
         # For vector mode we defer to warmup() for ingestion to avoid duplicate work
-        if self.mode == "qdrant":
+        if self.mode in ("qdrant", "faiss"):
             # Do not ingest here; warmup will handle ingestion explicitly when invoked
             pass
         else:
@@ -195,12 +201,15 @@ class RAGQueryTool:
     def warmup(self) -> Dict[str, Any]:
         """Optional warmup hook: for vector mode perform ingestion here."""
         start = time.time()
-        if self.mode != "qdrant":
+        if self.mode not in ("qdrant", "faiss"):
             # For local mode, just ensure index built
             self.ensure_model_loaded()
             return {"warmed_up": True, "mode": self.mode, "chunks": len(self._index), "sec": round(time.time() - start, 3)}
         # Vector mode ingestion
         try:
+            if self.mode == "faiss":
+                # Build a local FAISS index from PDF documents with per-page metadata
+                return self._warmup_faiss(start)
             # Import inside to keep main process free of deps; support both package and path-based loading
             def _load_vectorstore_cls():
                 try:
@@ -318,8 +327,11 @@ class RAGQueryTool:
             inputs = {}
         query = str(inputs.get("query") or "").strip()
         if not query:
-            return {"items": [], "source": "rag", "warning": "empty query", "inference_time": round(time.time() - start, 4)}
+            return {"items": [], "warning": "empty query", "inference_time": round(time.time() - start, 4)}
         top_k = int(inputs.get("top_k") or self.default_top_k)
+
+        logger.debug(f"mode={self.mode} query='{query}' top_k={top_k}")
+
         # Vector mode predict
         if self.mode == "qdrant":
             try:
@@ -367,15 +379,72 @@ class RAGQueryTool:
                 results = vs.similarity_search(query)
                 items: List[Dict[str, Any]] = []
                 for r in results[:top_k]:
+                    # Build structured source: material (book/file name without extension), page not available in qdrant path
+                    src_path = r.get("source_path") or r.get("source") or ""
+                    material = Path(str(src_path)).stem if src_path else (r.get("source") or "")
                     items.append({
-                        "title": r.get("source") or Path(str(r.get("source_path") or "")).name,
+                        "title": r.get("source") or Path(str(src_path)).name,
                         "text": (r.get("content") or "")[:1200],
-                        "source": r.get("source_path") or r.get("source"),
+                        "source": {"material": str(material), "page": None},
                         "score": round(float(r.get("score") or 0.0), 4),
                     })
-                return {"items": items, "source": "rag", "inference_time": round(time.time() - start, 4)}
+                return {"items": items, "inference_time": round(time.time() - start, 4)}
             except Exception as e:  # noqa
-                return {"items": [], "source": "rag", "warning": f"vector search failed: {e}", "inference_time": round(time.time() - start, 4)}
+                return {"items": [], "warning": f"vector search failed: {e}", "inference_time": round(time.time() - start, 4)}
+        if self.mode == "faiss":
+            try:
+                # Lazy import to keep dependencies scoped to the tool environment
+                from langchain_community.vectorstores import FAISS  # type: ignore
+                try:
+                    from langchain_huggingface import HuggingFaceEmbeddings  # type: ignore
+                except Exception:
+                    from langchain_community.embeddings import HuggingFaceEmbeddings  # type: ignore
+                # Resolve index directory relative to tool root
+                base_dir = Path(self.meta.get("root_dir") or Path(__file__).parent).resolve()
+                index_dir = (base_dir / Path(self.faiss_index_dir)).resolve()
+
+                logger.debug(f"FAISS index_dir={index_dir}")
+
+                if not (index_dir / "index.faiss").exists():
+                    return {"items": [], "warning": f"FAISS index missing at {index_dir}. Run warmup first.", "inference_time": round(time.time() - start, 4)}
+                
+                emb = HuggingFaceEmbeddings(model_name=self.embedding_model, show_progress=False)
+                
+                logger.debug(f"FAISS using embedding model={self.embedding_model}")
+                
+                vs = FAISS.load_local(str(index_dir), emb, allow_dangerous_deserialization=True)
+                logger.debug(f"FAISS loaded index from {index_dir}")
+
+                try:
+                    results = vs.similarity_search_with_score(query, k=top_k)
+                except AttributeError:
+                    # Fallback for environments without *_with_score API
+                    docs_only = vs.similarity_search(query, k=top_k)
+                    results = [(d, 0.0) for d in docs_only]
+
+                logger.debug(f"FAISS query='{query}' top_k={top_k} results={len(results)}")
+                items: List[Dict[str, Any]] = []
+                for doc, score in results:
+                    md = doc.metadata or {}
+                    book = md.get("book") or Path(md.get("source", "")).stem
+                    page = md.get("page_number") or md.get("page")
+                    title = f"{book} p.{page}" if page is not None else str(book)
+                    items.append({
+                        "title": title,
+                        "text": doc.page_content[:1200],
+                        "source": {"material": str(book), "page": int(page) if page is not None else None},
+                        "score": round(float(score), 4),
+                    })
+                return {"items": items, "inference_time": round(time.time() - start, 4)}
+            except Exception as e:
+                # Log full traceback for diagnostics and return structured warning
+                try:
+                    logger.exception("FAISS predict error")
+                except Exception:
+                    pass
+                etype = type(e).__name__
+                emsg = str(e) or repr(e)
+                return {"items": [], "warning": f"faiss search failed: {etype}: {emsg}", "inference_time": round(time.time() - start, 4)}
         q_toks = _tokenize(query)
         scored: List[Tuple[float, int]] = []  # (score, idx)
         for i, (_src, _chunk, toks) in enumerate(self._index):
@@ -386,7 +455,107 @@ class RAGQueryTool:
         items: List[Dict[str, Any]] = []
         for s, i in scored[:top_k]:
             src, chunk, _ = self._index[i]
-            items.append({"title": Path(src).name, "text": chunk[:1200], "source": src, "score": round(float(s), 4)})
-        return {"items": items, "source": "rag", "inference_time": round(time.time() - start, 4)}
+            # Structured source for local mode; page information is not available
+            items.append({
+                "title": Path(src).name,
+                "text": chunk[:1200],
+                "source": {"material": Path(src).stem, "page": None},
+                "score": round(float(s), 4),
+            })
+        return {"items": items, "inference_time": round(time.time() - start, 4)}
+
+    # --------------------------
+    # FAISS warmup/ingestion impl
+    # --------------------------
+    def _warmup_faiss(self, start_time: float) -> Dict[str, Any]:
+        """Build a local FAISS index from PDFs, preserving (book title, page number) metadata."""
+        try:
+            from langchain_community.document_loaders import PyPDFLoader  # type: ignore
+            from langchain_community.embeddings import HuggingFaceEmbeddings  # type: ignore
+            from langchain_community.vectorstores import FAISS  # type: ignore
+            try:
+                from langchain_text_splitters import RecursiveCharacterTextSplitter  # type: ignore
+            except Exception:
+                from langchain.text_splitter import RecursiveCharacterTextSplitter  # type: ignore
+        except Exception as e:
+            return {"warmed_up": False, "mode": self.mode, "error": f"missing deps for faiss mode: {e}"}
+
+        def _human_page(zero_based: int) -> int:
+            return int(zero_based) + 1
+
+        def _get_pdf_title(pdf_path: Path) -> str:
+            """Try reading PDF metadata title; fallback to filename (stem)."""
+            try:
+                from pypdf import PdfReader  # type: ignore
+                reader = PdfReader(str(pdf_path))
+                title = None
+                if getattr(reader, "metadata", None):
+                    meta = reader.metadata
+                    title = getattr(meta, "title", None) or (meta.get("/Title") if hasattr(meta, "get") else None)
+                if title and str(title).strip():
+                    return str(title).strip()
+            except Exception:
+                pass
+            return pdf_path.stem
+
+        # Collect PDF files only for FAISS ingestion
+        pdf_files = [p for p in self._iter_candidate_files() if str(p).lower().endswith(".pdf")]
+        if not pdf_files:
+            return {"warmed_up": False, "mode": self.mode, "error": "no PDF files found in corpus_dirs"}
+
+        # Load per-page docs with metadata (book, page_number)
+        page_docs: List[Any] = []  # LangChain Document
+        for pdf in pdf_files:
+            try:
+                loader = PyPDFLoader(str(pdf))
+                per_page = loader.load()  # one Document per page; metadata has {source, page}
+                # set book title
+                if self.bookmeta == "filename":
+                    book_title = Path(pdf).stem
+                else:
+                    book_title = _get_pdf_title(pdf)
+                for d in per_page:
+                    md = dict(d.metadata or {})
+                    md["book"] = book_title
+                    md["page_number"] = _human_page(md.get("page", 0)) if "page" in md else None
+                    d.metadata = md
+                page_docs.extend(per_page)
+            except Exception:
+                # Continue on individual file failures
+                continue
+
+        if not page_docs:
+            return {"warmed_up": False, "mode": self.mode, "error": "no pages loaded from PDFs"}
+
+        # Split into chunks while preserving metadata
+        splitter = RecursiveCharacterTextSplitter(
+            chunk_size=self.chunk_size,
+            chunk_overlap=self.chunk_overlap,
+            separators=["\n\n", "\n", "。", "！", "？", "；", " ", ""],
+        )
+        split_docs = splitter.split_documents(page_docs)
+        if not split_docs:
+            return {"warmed_up": False, "mode": self.mode, "error": "no chunks after split"}
+
+        # Build embeddings and FAISS index
+        embeddings = HuggingFaceEmbeddings(model_name=self.embedding_model, show_progress=True)
+        vs = FAISS.from_documents(split_docs, embeddings)
+
+        # Save index
+        base_dir = Path(self.meta.get("root_dir") or Path(__file__).parent).resolve()
+        index_dir = (base_dir / Path(self.faiss_index_dir)).resolve()
+        index_dir.mkdir(parents=True, exist_ok=True)
+        vs.save_local(str(index_dir))
+        self._faiss_ready = True
+        return {
+            "warmed_up": True,
+            "mode": self.mode,
+            "pdfs": len(pdf_files),
+            "pages": len(page_docs),
+            "chunks": len(split_docs),
+            "index_dir": str(index_dir),
+            "embedding_model": self.embedding_model,
+            "sec": round(time.time() - start_time, 3),
+        }
 
 __all__ = ["RAGQueryTool"]
