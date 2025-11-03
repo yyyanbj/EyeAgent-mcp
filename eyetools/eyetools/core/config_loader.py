@@ -77,6 +77,11 @@ def _merge_defaults(td: Dict[str, Any]) -> Dict[str, Any]:
     model = td.get("model", {})
     warmup = td.get("warmup", {})
     io = td.get("io", {})
+    # Allow top-level or variant-level 'description' to flow into io.description for downstream usage
+    if isinstance(td.get("description"), str):
+        if not isinstance(io, dict):
+            io = {}
+        io.setdefault("description", td["description"])  # variant-level wins over shared
 
     runtime.setdefault("load_mode", "auto")
     runtime.setdefault("max_workers", 1)

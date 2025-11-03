@@ -1,6 +1,7 @@
 package: disease_specific_cls
 entry: tool_impl:DiseaseSpecificClassificationTool
 category: vision
+description: "Disease-specific classification based on RETFound ViT-B/16 checkpoints; each variant targets a specific condition."
 shared:
   environment_ref: py311-retfound
   runtime:
@@ -30,84 +31,111 @@ variants:
   # preserves the on-disk folder (e.g., AMD_finetune).
   - variant: AH
     version: 0.1.0
+    description: "Disease-specific classifier for AH"
     params: { variant: AH_finetune }
   - variant: AION
     version: 0.1.0
+    description: "Disease-specific classifier for AION (anterior ischemic optic neuropathy)"
     params: { variant: AION_finetune }
   - variant: AMD
     version: 0.1.0
+    description: "Disease-specific classifier for AMD (age-related macular degeneration)"
     params: { variant: AMD_finetune }
   - variant: CM
     version: 0.1.0
+    description: "Disease-specific classifier for CM (cytomegalovirus retinitis)"
     params: { variant: CM_finetune }
   - variant: CNV
     version: 0.1.0
+    description: "Disease-specific classifier for CNV (choroidal neovascularization)"
     params: { variant: CNV_finetune }
   - variant: CSCR
     version: 0.1.0
+    description: "Disease-specific classifier for CSCR (central serous chorioretinopathy)"
     params: { variant: CSCR_finetune }
   - variant: Coats
     version: 0.1.0
+    description: "Disease-specific classifier for Coats disease"
     params: { variant: Coats_finetune }
   - variant: DR
     version: 0.1.0
+    description: "Disease-specific classifier for DR (diabetic retinopathy)"
     params: { variant: DR_finetune }
   - variant: ERM
     version: 0.1.0
+    description: "Disease-specific classifier for ERM (epiretinal membrane)"
     params: { variant: ERM_finetune }
   - variant: HR
     version: 0.1.0
+    description: "Disease-specific classifier for HR (hypertensive retinopathy)"
     params: { variant: HR_finetune }
   - variant: MGS
     version: 0.1.0
+    description: "Disease-specific classifier for MGS (myopic glaucomatous staphyloma)"
     params: { variant: MGS_finetune }
   - variant: MH
     version: 0.1.0
+    description: "Disease-specific classifier for MH (macular hole)"
     params: { variant: MH_finetune }
   - variant: PCV
     version: 0.1.0
+    description: "Disease-specific classifier for PCV (polypoidal choroidal vasculopathy)"
     params: { variant: PCV_finetune }
   - variant: RAO
     version: 0.1.0
+    description: "Disease-specific classifier for RAO (retinal artery occlusion)"
     params: { variant: RAO_finetune }
   - variant: RD
     version: 0.1.0
+    description: "Disease-specific classifier for RD (retinal detachment)"
     params: { variant: RD_finetune }
   - variant: ROP
     version: 0.1.0
+    description: "Disease-specific classifier for ROP (retinopathy of prematurity)"
     params: { variant: ROP_finetune }
   - variant: RP
     version: 0.1.0
+    description: "Disease-specific classifier for RP (retinitis pigmentosa)"
     params: { variant: RP_finetune }
   - variant: RVO
     version: 0.1.0
+    description: "Disease-specific classifier for RVO (retinal vein occlusion)"
     params: { variant: RVO_finetune }
   - variant: VHL
     version: 0.1.0
+    description: "Disease-specific classifier for VHL (von Hippel-Lindau disease)"
     params: { variant: VHL_finetune }
   - variant: VKH
     version: 0.1.0
+    description: "Disease-specific classifier for VKH (Vogt-Koyanagi-Harada disease)"
     params: { variant: VKH_finetune }
   - variant: WDS
     version: 0.1.0
+    description: "Disease-specific classifier for WDS (Wegener's granulomatosis)"
     params: { variant: WDS_finetune }
   - variant: corneal_ulcer
     version: 0.1.0
+    description: "Disease-specific classifier for corneal ulcer"
     params: { variant: corneal_ulcer_finetune }
   - variant: epiphora
     version: 0.1.0
+    description: "Disease-specific classifier for epiphora"
     params: { variant: epiphora_finetune }
   - variant: glaucoma
     version: 0.1.0
+    description: "Disease-specific classifier for glaucoma"
     params: { variant: glaucoma_finetune }
   - variant: keratoconus
     version: 0.1.0
+    description: "Disease-specific classifier for keratoconus"
     params: { variant: keratoconus_finetune }
   - variant: macular_dystrophy
     version: 0.1.0
+    description: "Disease-specific classifier for macular dystrophy"
     params: { variant: macular_dystrophy_finetune }
   - variant: metaPM
     version: 0.1.0
+    description: "Disease-specific classifier for metaPM (metaanalysis for pathologic myopia)"
     params: { variant: metaPM_finetune }
   # - variant: nuclear_cataract_1
   #   version: 0.1.0
@@ -123,19 +151,41 @@ variants:
   #   params: { variant: nuclear_cataract_4_finetune }
   - variant: nuclear_cataract
     version: 0.1.0
+    description: "Disease-specific classifier for nuclear cataract"
     params: { variant: nuclear_cataract_finetune }
+  - variant: nuclear_cataract_nc
+    version: 0.1.0
+    description: "Disease-specific classifier for nuclear cataract (nc)"
+    params: { variant: nuclear_cataract_nc_finetune }
+  - variant: nuclear_cataract_no
+    version: 0.1.0
+    description: "Disease-specific classifier for nuclear cataract (no)"
+    params: { variant: nuclear_cataract_no_finetune }
   - variant: opaque_cornea
     version: 0.1.0
+    description: "Disease-specific classifier for opaque cornea"
     params: { variant: opaque_cornea_finetune }
   - variant: retinoschisis
     version: 0.1.0
+    description: "Disease-specific classifier for retinoschisis"
     params: { variant: retinoschisis_finetune }
   - variant: toxoplasmosis
     version: 0.1.0
+    description: "Disease-specific classifier for ocular toxoplasmosis"
     params: { variant: toxoplasmosis_finetune }
   - variant: viral_retinitis
     version: 0.1.0
+    description: "Disease-specific classifier for viral retinitis"
     params: { variant: viral_retinitis_finetune }
+  # Routers
+  - variant: router
+    version: 0.1.0
+    description: "Binary router: detect whether any retinal disease is present"
+    params: { variant: router }
+  - variant: router_mc
+    version: 0.1.0
+    description: "Multi-class router: identify the specific disease category"
+    params: { variant: router_mc }
 metadata:
   authors: ["EyeAgent Team"]
   license: Apache-2.0

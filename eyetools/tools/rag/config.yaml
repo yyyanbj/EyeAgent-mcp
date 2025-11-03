@@ -1,6 +1,7 @@
 package: rag
 entry: tool_impl:RAGQueryTool
 # Do NOT set category here; discovery will infer from folder (tools/rag) to keep id as 'rag:query'
+description: "Lightweight local RAG query over markdown/txt documents for ophthalmology."
 shared:
   # Use an isolated environment for RAG to avoid polluting core deps
   environment_ref: py312-rag
@@ -26,6 +27,7 @@ shared:
 variants:
   - variant: query
     version: 0.1.0
+    description: "Retrieve and answer questions from local ophthalmology documents"
     params:
       top_k: 5
       # Max PDF pages to extract during indexing/warmup (to cap warmup time)

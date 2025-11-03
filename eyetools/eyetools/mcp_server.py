@@ -18,6 +18,7 @@ from .core.loader import discover_tools
 from .core.tool_manager import ToolManager
 from .core.role_router import RoleRouter
 from .core.logging import core_logger
+from .core.description_manager import DescriptionManager
 
 # Optional fastmcp import. We keep it optional so existing users without MCP needs are not blocked.
 try:  # pragma: no cover - import side effect
@@ -162,6 +163,8 @@ def create_app(
     enable_mcp: bool = True,
     # Revert default back to root for backward compatibility; can override via param or EYETOOLS_MCP_MOUNT_PATH env.
     mcp_mount_path: str = "/",
+    # Optional descriptions config path; can also be provided via env EYETOOLS_DESCRIPTION_CONFIG
+    description_config_path: Optional[str] = None,
 ):
     # Ensure consistent DEBUG-level logging and format for FastAPI/FastMCP and friends
     _configure_external_logging()
@@ -207,6 +210,11 @@ def create_app(
         core_logger.warning("No tools discovered. Check --tools-dir paths or environment variables.")
     tm = ToolManager(registry)
     role_router = RoleRouter(_load_role_config(role_config_path))
+    # Initialize descriptions manager
+    # Precedence: explicit arg > env > None
+    desc_env = os.getenv("EYETOOLS_DESCRIPTION_CONFIG")
+    desc_path = description_config_path or desc_env
+    description_manager = DescriptionManager(desc_path)
 
     app = FastAPI(title="eyetools-mcp", version="0.1.0")
 
@@ -283,6 +291,8 @@ def create_app(
         def register_single(meta):  # noqa: C901 complexity acceptable here
             tool_id = meta.id
             input_schema = build_input_schema(meta)
+            # Resolve human-friendly description for this tool
+            mcp_desc = description_manager.get(tool_id, meta)
             # Attempt explicit signature
             def make_explicit():
                 params = extract_param_names(input_schema, meta)
@@ -345,10 +355,10 @@ def create_app(
             # Decorator acquisition (handles input_schema support variance)
             try:
                 try:
-                    deco = mcp_instance.tool(name=tool_id, description=tool_id, input_schema=input_schema)  # type: ignore
+                    deco = mcp_instance.tool(name=tool_id, description=mcp_desc, input_schema=input_schema)  # type: ignore
                 except TypeError as te:
                     if 'input_schema' in str(te):
-                        deco = mcp_instance.tool(name=tool_id, description=tool_id)  # type: ignore
+                        deco = mcp_instance.tool(name=tool_id, description=mcp_desc)  # type: ignore
                         core_logger.debug("[MCP] no input_schema support (tool=%s)", tool_id)
                     else:
                         raise
@@ -366,7 +376,7 @@ def create_app(
                     param_styles[tool_id] = "kwargs"
                 except Exception as e:  # noqa
                     if "**kwargs" in str(e) or "kwargs" in str(e):
-                        deco2 = mcp_instance.tool(name=tool_id, description=tool_id)  # type: ignore
+                        deco2 = mcp_instance.tool(name=tool_id, description=mcp_desc)  # type: ignore
                         deco2(func_payload)
                         param_styles[tool_id] = "payload"
                         core_logger.info("[MCP] payload fallback tool=%s", tool_id)
@@ -447,6 +457,10 @@ def create_app(
                 "io": m.io,
                 "tags": m.tags,
             }
+            try:
+                out["description"] = description_manager.get(m.id, m)
+            except Exception:
+                pass
             tools_out.append(out)
         return {"tools": tools_out}
 
@@ -552,7 +566,37 @@ def create_app(
             "dynamic_interval_s": ctx.get("dynamic_interval_s"),
             "tool_paths": ctx.get("tool_paths"),
             "include_examples": ctx.get("include_examples"),
+            "description_config_path": ctx.get("description_config_path"),
         }
+
+    # Descriptions admin endpoints
+    @app.get("/admin/descriptions")
+    def admin_descriptions(include_tools: bool = Query(False)):
+        summary = description_manager.summary()
+        if include_tools:
+            items = []
+            for meta in registry.list():
+                try:
+                    items.append({"id": meta.id, "description": description_manager.get(meta.id, meta)})
+                except Exception:
+                    items.append({"id": meta.id, "description": meta.id})
+            summary["tools"] = items
+        return summary
+
+    @app.post("/admin/descriptions/reload")
+    def admin_descriptions_reload(path: Optional[str] = Query(None)):
+        if path:
+            # Update path then reload
+            description_manager.set_path(path)
+        else:
+            description_manager.reload()
+        # Re-register MCP tools to update descriptions exposed to clients
+        if enable_mcp and getattr(app.state, "_mcp_reregister", None):  # pragma: no cover
+            try:
+                app.state._mcp_reregister()  # type: ignore
+            except Exception as e:  # noqa
+                core_logger.warning(f"[MCP] MCP re-registration after descriptions reload failed: {e}")
+        return {"status": "ok", "summary": description_manager.summary()}
 
     # Debug / introspection endpoint for MCP (lists tool IDs FastMCP has registered)
     if enable_mcp:
@@ -678,7 +722,11 @@ def create_app(
         "dynamic_mark_idle_s": dynamic_mark_idle_s,
         "dynamic_unload_s": dynamic_unload_s,
         "dynamic_interval_s": dynamic_interval_s,
+        "description_config_path": desc_path,
     }
+
+    # attach state for external access
+    app.state.description_manager = description_manager
 
     return app
 

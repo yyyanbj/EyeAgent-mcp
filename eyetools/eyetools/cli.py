@@ -69,6 +69,10 @@ def build_parser():
         default=4,
         help="Max worker threads for parallel subprocess preload",
     )
+    serve.add_argument(
+        "--description-config",
+        help="Path to YAML/JSON file mapping tool IDs/patterns to descriptions",
+    )
     return p
 
 
@@ -96,6 +100,7 @@ def main(argv=None):
         dynamic_interval_s=getattr(args, "dynamic_interval_s", 60.0),
         parallel_subprocess=getattr(args, "parallel_subprocess", False),
         parallel_subprocess_workers=getattr(args, "parallel_subprocess_workers", 4),
+        description_config_path=getattr(args, "description_config", None),
     )
     uvicorn.run(app, host=args.host, port=args.port, reload=args.reload)
     return 0

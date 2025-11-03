@@ -1,6 +1,7 @@
 package: multimodal
 entry: tool_impl:MultimodalTool
 category: vision
+description: "Multi-modal synthesis and analysis (e.g., Fundus→OCT, Fundus→EyeGlobe) running in a subprocess."
 shared:
   environment_ref: py312-multimodal
   runtime:
@@ -24,10 +25,12 @@ shared:
 variants:
   - variant: fundus2oct
     version: 0.1.0
+    description: "Synthesize OCT from fundus (conditional generation)"
     params:
       task: fundus2oct
   - variant: fundus2eyeglobe
     version: 0.1.0
+    description: "Synthesize EyeGlobe from fundus (conditional generation)"
     params:
       task: fundus2eyeglobe
 metadata:

@@ -1,5 +1,6 @@
 package: web_search
 entry: tool_impl:WebSearchTool
+description: "Web search utilities for PubMed and Tavily with graceful offline fallback."
 shared:
   environment_ref: py312
   runtime:
@@ -22,12 +23,14 @@ variants:
   - id: web_search:pubmed
     variant: pubmed
     version: 0.1.0
+    description: "PubMed literature search"
     params:
       provider: pubmed
       top_k: 3
   - id: web_search:tavily
     variant: tavily
     version: 0.1.0
+    description: "Tavily general web search"
     params:
       provider: tavily
       top_k: 3

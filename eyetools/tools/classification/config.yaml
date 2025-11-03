@@ -1,6 +1,7 @@
 package: classification
 entry: tool_impl:ClassificationTool
 category: vision
+description: "General ophthalmic image classification: modality, quality, laterality, multi-disease screening, and age estimation."
 shared:
   environment_ref: py312
   runtime:
@@ -24,26 +25,31 @@ shared:
 variants:
   - variant: modality
     version: 0.1.0
+    description: "Classify imaging modality (CFP, OCT, FFA, etc.)"
     params:
       task: modality
       threshold: 0.3
   - variant: cfp_quality
     version: 0.1.0
+    description: "Assess fundus photo quality (clarity/occlusion/exposure)"
     params:
       task: cfp_quality
       threshold: 0.3
   - variant: laterality
     version: 0.1.0
+    description: "Determine laterality (left/right eye)"
     params:
       task: laterality
       threshold: 0.3
   - variant: multidis
     version: 0.1.0
+    description: "Screen for multiple retinal diseases"
     params:
       task: multidis
       threshold: 0.3
   - variant: cfp_age
     version: 0.1.0
+    description: "Estimate subject age from fundus photo (years)"
     params:
       task: cfp_age
       threshold: 0.0

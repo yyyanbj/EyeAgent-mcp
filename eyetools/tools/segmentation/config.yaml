@@ -1,6 +1,7 @@
 package: segmentation
 entry: tool_impl:SegmentationTool
 category: vision
+description: "Ophthalmic lesion and layer segmentation powered by nnUNet (runs in a subprocess-managed environment)."
 shared:
   environment_ref: py312-seg
   runtime:
@@ -22,66 +23,82 @@ shared:
 variants:
   - variant: cfp_DR
     version: 0.1.0
+    description: "CFP diabetic retinopathy lesion segmentation"
     params:
       task: cfp_DR
   - variant: cfp_artifact
     version: 0.1.0
+    description: "CFP artifact segmentation"
     params:
       task: cfp_artifact
   - variant: cfp_atrophy
     version: 0.1.0
+    description: "CFP atrophy segmentation"
     params:
       task: cfp_atrophy
   - variant: cfp_drusen
     version: 0.1.0
+    description: "CFP drusen segmentation"
     params:
       task: cfp_drusen
   - variant: cfp_cnv
     version: 0.1.0
+    description: "CFP choroidal neovascularization segmentation"
     params:
       task: cfp_cnv
   - variant: cfp_mh
     version: 0.1.0
+    description: "CFP macular hole region segmentation"
     params:
       task: cfp_mh
   - variant: cfp_rd
     version: 0.1.0
+    description: "CFP retinal detachment segmentation"
     params:
       task: cfp_rd
   - variant: cfp_scar
     version: 0.1.0
+    description: "CFP scar segmentation"
     params:
       task: cfp_scar
   - variant: cfp_laserscar
     version: 0.1.0
+    description: "CFP laser scar segmentation"
     params:
       task: cfp_laserscar
   - variant: cfp_laserspots
     version: 0.1.0
+    description: "CFP laser spots segmentation"
     params:
       task: cfp_laserspots
   - variant: cfp_membrane
     version: 0.1.0
+    description: "CFP epiretinal membrane segmentation"
     params:
       task: cfp_membrane
   - variant: cfp_edema
     version: 0.1.0
+    description: "CFP macular edema segmentation"
     params:
       task: cfp_edema
   - variant: oct_layer
     version: 0.1.0
+    description: "OCT retinal layers segmentation"
     params:
       task: oct_layer
   - variant: oct_PMchovefosclera
     version: 0.1.0
+    description: "OCT posterior segment (PM choroid/sclera) segmentation"
     params:
       task: oct_PMchovefosclera
   - variant: oct_lesion
     version: 0.1.0
+    description: "OCT lesion segmentation"
     params:
       task: oct_lesion
   - variant: ffa_lesion
     version: 0.1.0
+    description: "FFA lesion segmentation"
     params:
       task: ffa_lesion
 metadata:
