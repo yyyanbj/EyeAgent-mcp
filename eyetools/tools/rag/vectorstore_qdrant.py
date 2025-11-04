@@ -5,7 +5,11 @@ from pathlib import Path
 from typing import List, Dict, Any, Tuple, Optional
 
 from langchain_core.documents import Document
-from langchain.storage import LocalFileStore
+# LocalFileStore is available in newer langchain; provide a small fallback if missing
+try:  # pragma: no cover - optional path
+    from langchain.storage import LocalFileStore  # type: ignore
+except Exception:  # noqa
+    LocalFileStore = None  # type: ignore
 from langchain_qdrant import FastEmbedSparse, QdrantVectorStore, RetrievalMode
 from qdrant_client import QdrantClient
 from qdrant_client.http.models import Distance, SparseVectorParams, VectorParams
@@ -46,7 +50,7 @@ class VectorStore:
             self.logger.error(f"Failed ensuring collection: {e}")
             raise
 
-    def get_vectorstore(self) -> Tuple[QdrantVectorStore, LocalFileStore]:
+    def get_vectorstore(self) -> Tuple[QdrantVectorStore, Any]:
         self._ensure_collection()
         sparse_embeddings = FastEmbedSparse(model_name="Qdrant/bm25")
         vs = QdrantVectorStore(
@@ -58,7 +62,8 @@ class VectorStore:
             vector_name="dense",
             sparse_vector_name="sparse",
         )
-        docstore = LocalFileStore(self.doc_local_path)
+        # Build a simple local docstore if langchain.storage.LocalFileStore is not available
+        docstore = _ensure_docstore(self.doc_local_path)
         return vs, docstore
 
     def add_documents(self, document_chunks: List[str], document_path: str, ids: Optional[List[str]] = None) -> List[str]:
@@ -97,3 +102,54 @@ class VectorStore:
                 "source_path": doc.metadata.get("source_path"),
             })
         return out
+
+
+# -----------------------------
+# Fallback local docstore
+# -----------------------------
+class _SimpleLocalStore:
+    """Tiny on-disk key->bytes store compatible with LocalFileStore.mset/mget used here.
+
+    Files are stored as <root>/<key> with a simple suffix to avoid collisions.
+    """
+
+    def __init__(self, root: str):
+        self.root = Path(root)
+        self.root.mkdir(parents=True, exist_ok=True)
+
+    def _path(self, key: str) -> Path:
+        # Avoid directory traversal and overly long names
+        safe = "".join(ch for ch in key if ch.isalnum() or ch in ("_", "-"))[:128]
+        return self.root / f"{safe}.bin"
+
+    def mset(self, items: List[tuple[str, bytes]]):
+        for k, v in items:
+            try:
+                p = self._path(str(k))
+                p.write_bytes(v)
+            except Exception:
+                # best-effort; ignore individual failures
+                pass
+
+    def mget(self, keys: List[str]) -> List[bytes | None]:
+        out: List[bytes | None] = []
+        for k in keys:
+            try:
+                p = self._path(str(k))
+                out.append(p.read_bytes() if p.exists() else None)
+            except Exception:
+                out.append(None)
+        return out
+
+
+def _ensure_docstore(path: str):
+    """Return a docstore instance. Prefer LocalFileStore if available, else fallback.
+
+    We keep the same mset/mget interface used in this module.
+    """
+    if LocalFileStore is not None:
+        try:
+            return LocalFileStore(path)  # type: ignore
+        except Exception:  # pragma: no cover - defensive fallback
+            pass
+    return _SimpleLocalStore(path)

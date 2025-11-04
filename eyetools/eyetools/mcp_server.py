@@ -8,6 +8,7 @@ CLI will import this module and call create_app().
 """
 from __future__ import annotations
 from fastapi import FastAPI, HTTPException, Query
+from contextlib import asynccontextmanager
 from pydantic import BaseModel
 from typing import List, Optional, Any, Dict, Callable
 import os, json, logging, time, datetime
@@ -695,13 +696,44 @@ def create_app(
                         core_logger.exception(f"maintenance loop error: {e}")
                     await asyncio.sleep(dynamic_interval_s)
 
-            @app.on_event("startup")
-            async def _start_maintenance():  # pragma: no cover
-                if getattr(app.state, "_maintenance_started", False):
-                    return
-                loop = asyncio.get_event_loop()
-                loop.create_task(_maintenance_loop())
-                app.state._maintenance_started = True
+            # Use FastAPI lifespan to manage startup/shutdown without deprecated on_event
+            existing_lifespan = app.router.lifespan_context
+
+            @asynccontextmanager
+            async def _lifespan(app_: FastAPI):  # pragma: no cover
+                # Helper to start background maintenance
+                async def _start():
+                    if getattr(app_.state, "_maintenance_started", False):
+                        return
+                    app_.state._maintenance_task = asyncio.create_task(_maintenance_loop())
+                    app_.state._maintenance_started = True
+
+                async def _stop():
+                    task = getattr(app_.state, "_maintenance_task", None)
+                    if task:
+                        task.cancel()
+                        try:
+                            await task
+                        except Exception:  # pragma: no cover - task cancellation
+                            pass
+                    app_.state._maintenance_started = False
+
+                # Chain with any existing lifespan (e.g., FastMCP) if present
+                if existing_lifespan:
+                    async with existing_lifespan(app_):
+                        await _start()
+                        try:
+                            yield
+                        finally:
+                            await _stop()
+                else:
+                    await _start()
+                    try:
+                        yield
+                    finally:
+                        await _stop()
+
+            app.router.lifespan_context = _lifespan
         else:
             core_logger.warning("Unknown lifecycle_mode=%s (ignored)", lifecycle_mode)
     else:
