@@ -154,7 +154,6 @@ async def run_benchmark_cli(args):
             ),
             model=ModelConfig(
                 mcp_server_url=args.mcp_url,
-                dry_run=args.dry_run,
                 enable_format_agent=not args.no_format_agent
             ),
             output=OutputConfig(
@@ -211,7 +210,6 @@ async def rerun_failed_cli(args):
         config,
         cases_dir=args.cases_dir,
         keep_history=args.keep_history,
-        dry_run=args.dry_run,
         verbose=args.verbose,
     )
 
@@ -276,7 +274,6 @@ def generate_config_cli(args):
             'model': {
                 'workflow_backend': 'langgraph',
                 'mcp_server_url': 'http://localhost:8000/mcp/',
-                'dry_run': False,
                 'enable_format_agent': True
             },
             'metrics': {
@@ -319,16 +316,6 @@ def generate_config_cli(args):
             'metrics': {'average': 'weighted'},
             'output': {'output_dir': './multi_disease_results'}
         },
-        'dry-run': {
-            'dataset': {
-                'name': 'test_dataset',
-                'path': './data/test.csv',
-                'max_samples': 10
-            },
-            'model': {'dry_run': True},
-            'metrics': {'compute_auc': False},
-            'output': {'output_dir': './test_results', 'save_detailed_report': False}
-        }
     }
     
     if args.template not in templates:

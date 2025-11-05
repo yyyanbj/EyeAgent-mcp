@@ -1,8 +1,10 @@
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Tuple
 from .base_agent import BaseAgent as DiagnosticBaseAgent
 from .registry import register_agent
 from fastmcp import Client
-from ..config.tools_filter import filter_tool_ids, select_tool_ids
+from eyeagent.core.tools_filter import filter_tool_ids, select_tool_ids
+import asyncio
+from loguru import logger
 
 @register_agent
 class ImageAnalysisAgent(DiagnosticBaseAgent):
@@ -55,67 +57,145 @@ class ImageAnalysisAgent(DiagnosticBaseAgent):
 
     async def a_run(self, context: Dict[str, Any]) -> Dict[str, Any]:
         images = context.get("images", [])
-        # Try to infer modality from orchestrator outputs if available
-        modality = None
+        incremental = bool(context.get("incremental"))
+        new_ids_set = set(context.get("new_image_ids") or []) if incremental else set()
+        prev_outputs = context.get("image_analysis") if incremental else None
+        # 1) Build per-image modality map from preliminary outputs; default to CFP if unknown
         orch = context.get("orchestrator_outputs") or {}
-        mod_calls = orch.get("modality_results") or []
-        if mod_calls:
-            try:
-                # assume first modality result contains dict probs or label
-                out = (mod_calls[0] or {}).get("output")
+        mod_calls = orch.get("preliminary", {}).get("modality_results") or orch.get("modality_results") or []
+        id_to_mod: Dict[str, str] = {}
+        try:
+            for call in mod_calls:
+                img_id = call.get("image_id") or None
+                out = call.get("output")
+                label = None
                 if isinstance(out, dict):
-                    # if label provided
-                    modality = out.get("label") or out.get("prediction")
-                    # else pick max prob key if probabilities
-                    if not modality:
-                        modality = max(out.items(), key=lambda kv: float(kv[1] or 0))[0]
-            except Exception:
-                modality = None
+                    label = out.get("label") or out.get("prediction")
+                    if not label:
+                        # choose max prob key
+                        try:
+                            label = max((out.get("probabilities") or out).items(), key=lambda kv: float(kv[1] or 0))[0]
+                        except Exception as e:
+                            logger.debug(f"Failed to infer modality label from probabilities: {e}")
+                            label = None
+                if img_id and label:
+                    id_to_mod[str(img_id)] = str(label).upper()
+        except Exception as e:
+            logger.exception(f"Failed to build id_to_mod from preliminary modality results: {e}")
+            id_to_mod = {}
 
-        task_desc = "Perform modality-appropriate analysis (quality if applicable, segmentation)."
-        # Config-first: derive allowed tools from config; fallback to base list
+        # 2) Resolve allowed tools from config once
         allowed = select_tool_ids(self.__class__.__name__, base_tool_ids=self.allowed_tool_ids, role=self.role)
-        plan = await self.plan_tools(task_desc, allowed)
-        if not plan:
-            plan = []
-            # CFP pipeline
-            if (modality or "").upper() == "CFP" or modality is None:
-                # If modality unknown, default to CFP-friendly pipeline (safe subset)
-                plan.append({"tool_id": "classification:cfp_quality", "arguments": None, "reasoning": "Assess CFP quality."})
-                plan.append({"tool_id": "classification:cfp_age", "arguments": None, "reasoning": "Estimate patient's age from CFP."})
-                for tid in self.allowed_tool_ids:
+
+        # 3) Build per-modality static plans (fallback when planner not used)
+        def default_plan_for_mod(mod: str) -> List[Dict[str, Any]]:
+            mod = (mod or "").upper()
+            plan: List[Dict[str, Any]] = []
+            if mod in ("", "CFP"):
+                if "classification:cfp_quality" in allowed:
+                    plan.append({"tool_id": "classification:cfp_quality", "arguments": None, "reasoning": "Assess CFP quality."})
+                if "classification:cfp_age" in allowed:
+                    plan.append({"tool_id": "classification:cfp_age", "arguments": None, "reasoning": "Estimate patient's age from CFP."})
+                for tid in allowed:
                     if tid.startswith("segmentation:cfp_"):
                         plan.append({"tool_id": tid, "arguments": None, "reasoning": "Run CFP lesion segmentation."})
-            elif (modality or "").upper() == "OCT":
-                for tid in self.allowed_tool_ids:
+            elif mod == "OCT":
+                for tid in allowed:
                     if tid.startswith("segmentation:oct_"):
                         plan.append({"tool_id": tid, "arguments": None, "reasoning": "Run OCT segmentation."})
-            elif (modality or "").upper() == "FFA":
-                plan.append({"tool_id": "segmentation:ffa_lesion", "arguments": None, "reasoning": "Run FFA lesion segmentation."})
+            elif mod == "FFA":
+                if "segmentation:ffa_lesion" in allowed:
+                    plan.append({"tool_id": "segmentation:ffa_lesion", "arguments": None, "reasoning": "Run FFA lesion segmentation."})
+            return plan
 
-        tool_calls = []
-        async with self._client_ctx() as client:
-            for step in plan:
-                tool_id = step.get("tool_id")
-                if tool_id not in allowed:
+        # 4) Optionally allow the LLM planner to propose a general plan; we will still adapt it per-image by modality
+        generic_plan = await self.plan_tools(
+            "Perform modality-appropriate analysis (quality if applicable, segmentation).",
+            allowed,
+        )
+
+        # 5) Execute per-image plans, only calling tools relevant to that image's modality
+        tool_calls: List[Dict[str, Any]] = []
+
+        async def run_plan_for_image(client: Client | None, img: Dict[str, Any]) -> List[Dict[str, Any]]:
+            img_id = img.get("image_id") or img.get("path") or "_"
+            mod = id_to_mod.get(str(img_id)) or "CFP"  # safe default
+            # Derive an image-specific plan by filtering generic_plan to this modality; fallback to default
+            plan_for_img: List[Dict[str, Any]] = []
+            if generic_plan:
+                for step in generic_plan:
+                    tid = step.get("tool_id")
+                    if not tid or tid not in allowed:
+                        continue
+                    if mod == "CFP" and (tid.startswith("classification:cfp_") or tid.startswith("segmentation:cfp_")):
+                        plan_for_img.append(step)
+                    elif mod == "OCT" and tid.startswith("segmentation:oct_"):
+                        plan_for_img.append(step)
+                    elif mod == "FFA" and tid == "segmentation:ffa_lesion":
+                        plan_for_img.append(step)
+            if not plan_for_img:
+                plan_for_img = default_plan_for_mod(mod)
+
+            calls: List[Dict[str, Any]] = []
+            for step in plan_for_img:
+                tid = step.get("tool_id")
+                if not tid or tid not in allowed:
                     continue
-                calls = await self.call_tool_per_image(client, tool_id, images, step.get("arguments") or {})
-                for c in calls:
-                    c["reasoning"] = step.get("reasoning")
-                tool_calls.extend(calls)
+                args = dict(step.get("arguments") or {})
+                if img.get("path"):
+                    args["image_path"] = img["path"]
+                tc = await self._call_tool(client, tid, args)
+                tc["image_id"] = img_id
+                tc["reasoning"] = step.get("reasoning")
+                calls.append(tc)
+            return calls
 
-            # Optional: small knowledge query based on top diseases or lesions summary
-            kn_allowed = select_tool_ids(self.__class__.__name__, base_tool_ids=["rag:query", "web_search:pubmed", "web_search:tavily"], role=self.role)
-            if kn_allowed:
-                # Build a query later using aggregated outputs below; here we just reserve a placeholder
-                pass
+        async with self._client_ctx() as client:
+            # If no images present, we still allow running default CFP plan once with no image
+            if not images:
+                for step in default_plan_for_mod("CFP"):
+                    tid = step.get("tool_id")
+                    if tid in allowed:
+                        tc = await self._call_tool(client, tid, step.get("arguments") or {})
+                        tc["reasoning"] = step.get("reasoning")
+                        tool_calls.append(tc)
+            else:
+                imgs_to_process = [img for img in images if isinstance(img, dict) and ((not new_ids_set) or ((str(img.get("image_id") or img.get("path")) in new_ids_set)))]
+                # Strict sequential per-image execution to preserve order
+                if incremental and not imgs_to_process:
+                    pass  # nothing to do
+                else:
+                    for img in imgs_to_process:
+                        try:
+                            calls = await run_plan_for_image(client, img)
+                            tool_calls.extend(calls)
+                        except Exception as e:
+                            logger.exception(f"Per-image plan execution failed: {e}")
+                            tool_calls.append({"tool_id": "__internal__", "status": "failed", "error": str(e)})
+
+            # Optional placeholder: knowledge tools planned later after aggregation
+            # We compute the query based on aggregated outputs below
 
         # Aggregate outputs (simplified)
         # Aggregate per-image
+        # Seed from previous outputs in incremental mode (per_image merge)
         quality = {}
         ages = {}
         lesions = {}
         diseases = {}
+        if isinstance(prev_outputs, dict):
+            per_prev = prev_outputs.get("per_image") or {}
+            if isinstance(per_prev, dict):
+                quality.update(per_prev.get("quality") or {})
+                if isinstance(per_prev.get("age"), dict):
+                    ages.update(per_prev.get("age") or {})
+                if isinstance(per_prev.get("lesions"), dict):
+                    # deep copy per tool map per image
+                    for k, v in (per_prev.get("lesions") or {}).items():
+                        if isinstance(v, dict):
+                            lesions[k] = dict(v)
+                if isinstance(per_prev.get("diseases"), dict):
+                    diseases.update(per_prev.get("diseases") or {})
         for c in tool_calls:
             tid = c.get("tool_id")
             out = c.get("output")
@@ -168,7 +248,8 @@ class ImageAnalysisAgent(DiagnosticBaseAgent):
                 if isinstance(probs, dict) and probs:
                     try:
                         tops = sorted(probs.items(), key=lambda kv: float(kv[1] or 0), reverse=True)[:3]
-                    except Exception:
+                    except (TypeError, ValueError) as e:
+                        logger.debug(f"Failed to sort disease probabilities for {img_id}: {e}")
                         tops = list(probs.items())[:3]
                     if tops:
                         top_entries.append(f"{img_id}: " + ", ".join([f"{k} {_fmt_prob(v)}" for k, v in tops]))
@@ -206,6 +287,13 @@ class ImageAnalysisAgent(DiagnosticBaseAgent):
                         knowledge_blocks.append(out)
         # Merge diseases across images into a single dict (max probability per disease) for backward compatibility
         merged_diseases: Dict[str, Any] = {}
+        # include prior merged if available
+        if isinstance(prev_outputs, dict) and isinstance(prev_outputs.get("diseases"), dict):
+            for k, v in (prev_outputs.get("diseases") or {}).items():
+                try:
+                    merged_diseases[k] = float(v)
+                except Exception:
+                    pass
         if isinstance(diseases, dict):
             for _img, probs in diseases.items():
                 if isinstance(probs, dict):
@@ -231,6 +319,6 @@ class ImageAnalysisAgent(DiagnosticBaseAgent):
             "role": self.role,
             "outputs": outputs,
             "tool_calls": tool_calls,
-            "reasoning": reasoning
+            "reasoning": ("Incremental update: merged with prior outputs. " + reasoning) if incremental else reasoning
         })
-        return {"agent": self.name, "role": self.role, "outputs": outputs, "tool_calls": tool_calls, "reasoning": reasoning}
+        return {"agent": self.name, "role": self.role, "outputs": outputs, "tool_calls": tool_calls, "reasoning": ("Incremental update: merged with prior outputs. " + reasoning) if incremental else reasoning}

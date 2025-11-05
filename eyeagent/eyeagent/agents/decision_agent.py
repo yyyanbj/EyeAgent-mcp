@@ -1,4 +1,5 @@
 from typing import Any, Dict, List
+from loguru import logger
 
 from .base_agent import BaseAgent as DiagnosticBaseAgent
 from .registry import register_agent
@@ -57,8 +58,8 @@ class DecisionAgent(DiagnosticBaseAgent):
                     "grade": dg.get("grade"),
                     "confidence": dg.get("confidence"),
                 })
-        except Exception:
-            pass
+        except Exception as e:
+            logger.exception(f"Failed to extract specialist primary diagnoses: {e}")
 
         # Candidates from image_analysis probabilities as a fallback
         candidates: List[str] = []
@@ -66,10 +67,14 @@ class DecisionAgent(DiagnosticBaseAgent):
             probs = image_analysis.get("diseases") if isinstance(image_analysis, dict) else None
             if isinstance(probs, dict):
                 # top-5 by probability
-                items = sorted(probs.items(), key=lambda kv: float(kv[1] or 0), reverse=True)[:5]
+                try:
+                    items = sorted(probs.items(), key=lambda kv: float(kv[1] or 0), reverse=True)[:5]
+                except (TypeError, ValueError) as e:
+                    logger.debug(f"Failed to sort image_analysis diseases: {e}")
+                    items = list(probs.items())[:5]
                 candidates = [k for k, _ in items]
-        except Exception:
-            pass
+        except Exception as e:
+            logger.exception(f"Failed to derive candidates from image_analysis: {e}")
         # Last resort: preliminary screening in orchestrator outputs
         if not candidates:
             try:
@@ -80,8 +85,8 @@ class DecisionAgent(DiagnosticBaseAgent):
                         pr = out.get("probabilities") if isinstance(out.get("probabilities"), dict) else out
                         if isinstance(pr, dict):
                             candidates = list(pr.keys())[:5]
-            except Exception:
-                pass
+            except Exception as e:
+                logger.exception(f"Failed to derive candidates from orchestrator screening: {e}")
 
         # Compose a short narrative via LLM from a deterministic summary
         prim_txt = ", ".join([f"{d.get('disease')} {d.get('grade')}" for d in primary if d.get("disease") and d.get("grade")])
@@ -96,9 +101,10 @@ class DecisionAgent(DiagnosticBaseAgent):
         kn_blocks: List[Dict[str, Any]] = []
         kn_query = None
         try:
-            from ..config.tools_filter import filter_tool_ids  # lazy import to avoid cycles
+            from eyeagent.core.tools_filter import filter_tool_ids  # lazy import to avoid cycles
             kn_allowed = filter_tool_ids(self.__class__.__name__, list(self.allowed_tool_ids))
-        except Exception:
+        except Exception as e:
+            logger.warning(f"Failed to filter knowledge tools; using defaults. Error: {e}")
             kn_allowed = list(self.allowed_tool_ids)
         if kn_allowed and candidates:
             kn_query = ", ".join(candidates[:5])

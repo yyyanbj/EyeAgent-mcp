@@ -91,7 +91,6 @@ dataset:
 model:
   workflow_backend: "langgraph"
   mcp_server_url: "http://localhost:8000/mcp/"
-  dry_run: false
   enable_format_agent: true
 ```
 
@@ -171,7 +170,6 @@ See the `examples/` directory for various configuration examples:
 - `basic_benchmark.yaml`: Basic classification evaluation
 - `dr_screening_benchmark.yaml`: Diabetic retinopathy screening
 - `multi_disease_benchmark.yaml`: Multi-disease classification
-- `dry_run_benchmark.yaml`: Testing without model inference
 - `vqa_cfp_real.yaml`: Multi-agent workflow on VQA CFP dataset
 - `vqa_cfp_single_agent.yaml`: Single-agent (UnifiedAgent) on the same dataset for direct comparison
 
@@ -285,7 +283,6 @@ case files without executing new diagnoses.
 Enable verbose logging and dry-run mode for debugging:
 
 ```python
-config.model.dry_run = True
 config.output.verbose = True
 ```
 

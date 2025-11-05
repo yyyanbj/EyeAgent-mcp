@@ -1,8 +1,9 @@
 from typing import Any, Dict, List
+from loguru import logger
 
 from .base_agent import BaseAgent as DiagnosticBaseAgent
 from .registry import register_agent
-from ..config.tools_filter import filter_tool_ids, select_tool_ids
+from eyeagent.core.tools_filter import filter_tool_ids, select_tool_ids
 
 
 @register_agent
@@ -49,8 +50,8 @@ class KnowledgeAgent(DiagnosticBaseAgent):
                 d = dg.get("disease")
                 if d and d not in diseases:
                     diseases.append(d)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.exception(f"Failed to extract diseases from specialist: {e}")
         if not diseases:
             ia = context.get("image_analysis") or {}
             probs = ia.get("diseases")
@@ -69,8 +70,8 @@ class KnowledgeAgent(DiagnosticBaseAgent):
                         probs = out.get("probabilities") if isinstance(out.get("probabilities"), dict) else out
                         if isinstance(probs, dict):
                             diseases = list(probs.keys())[:3]
-            except Exception:
-                pass
+            except Exception as e:
+                logger.exception(f"Failed to extract diseases from preliminary screening: {e}")
         # Construct a focused query
         parts = []
         if diseases:

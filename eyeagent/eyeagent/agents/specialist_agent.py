@@ -1,9 +1,10 @@
 from typing import Any, Dict, List
 from .base_agent import BaseAgent as DiagnosticBaseAgent
 from .registry import register_agent
-from ..tools.tool_registry import specialist_tools, get_tool, resolve_specialist_tools, role_tool_ids
-from ..config.tools_filter import filter_tool_ids, select_tool_ids
+from eyeagent.tools.tool_registry import specialist_tools, get_tool, resolve_specialist_tools, role_tool_ids
+from eyeagent.core.tools_filter import filter_tool_ids, select_tool_ids
 from fastmcp import Client
+from loguru import logger
 
 @register_agent
 class SpecialistAgent(DiagnosticBaseAgent):
@@ -30,6 +31,9 @@ class SpecialistAgent(DiagnosticBaseAgent):
 
     async def a_run(self, context: Dict[str, Any]) -> Dict[str, Any]:
         candidate_diseases: List[str] = context.get("candidate_diseases", [])
+        incremental = bool(context.get("incremental"))
+        new_ids_set = set(context.get("new_image_ids") or []) if incremental else set()
+        prev_outputs = context.get("specialist") if incremental else None
         # Resolve candidate diseases to concrete disease-specific tools (robust mapping)
         tools_meta = resolve_specialist_tools(candidate_diseases)
         # Fallback: dynamic default → allow all specialist tools if none resolved
@@ -62,10 +66,25 @@ class SpecialistAgent(DiagnosticBaseAgent):
             ]
 
         images = context.get("images", [])
-        img_list = images if images else [None]
+        # If incremental and new_image_ids provided, restrict to new images only
+        if incremental and new_ids_set:
+            images_to_process = [img for img in images if isinstance(img, dict) and (str(img.get("image_id") or img.get("path")) in new_ids_set)]
+        else:
+            images_to_process = images
+        img_list = images_to_process if images_to_process else [None]
         tool_calls: List[Dict[str, Any]] = []
+        # Seed from previous outputs if incremental
         results_flat: List[Dict[str, Any]] = []
         results_by_image: Dict[str, List[Dict[str, Any]]] = {}
+        if isinstance(prev_outputs, dict):
+            for r in (prev_outputs.get("disease_grades") or []):
+                if isinstance(r, dict):
+                    results_flat.append(dict(r))
+            per_prev = (prev_outputs.get("per_image") or {}).get("disease_grades") or {}
+            if isinstance(per_prev, dict):
+                for k, arr in per_prev.items():
+                    if isinstance(arr, list):
+                        results_by_image[k] = [dict(x) for x in arr if isinstance(x, dict)]
 
         async with self._client_ctx() as client:
             for step in plan:
@@ -99,7 +118,8 @@ class SpecialistAgent(DiagnosticBaseAgent):
                                 try:
                                     # pick top label by probability
                                     items = sorted(probs.items(), key=lambda kv: float(kv[1] or 0.0), reverse=True)
-                                except Exception:
+                                except (TypeError, ValueError) as e:
+                                    logger.debug(f"Failed to sort specialist probabilities for {tool_id}: {e}")
                                     items = list(probs.items())
                                 if items:
                                     top_label, top_prob = items[0]
@@ -112,8 +132,8 @@ class SpecialistAgent(DiagnosticBaseAgent):
                                         grade = grade or str(top_label)
                                         try:
                                             confidence = confidence if confidence is not None else float(top_prob)
-                                        except Exception:
-                                            pass
+                                        except (TypeError, ValueError) as e:
+                                            logger.debug(f"Failed to convert top_prob to float for {tool_id}: {e}")
                             elif isinstance(prob, (int, float)):
                                 # Binary scalar prob
                                 grade = grade or ("positive" if (predicted is True or prob >= 0.5) else "negative")
@@ -202,6 +222,6 @@ class SpecialistAgent(DiagnosticBaseAgent):
             "role": self.role,
             "outputs": outputs,
             "tool_calls": tool_calls,
-            "reasoning": reasoning
+            "reasoning": ("Incremental update: merged with prior outputs. " + reasoning) if incremental else reasoning
         })
-        return {"agent": self.name, "role": self.role, "outputs": outputs, "tool_calls": tool_calls, "reasoning": reasoning}
+        return {"agent": self.name, "role": self.role, "outputs": outputs, "tool_calls": tool_calls, "reasoning": ("Incremental update: merged with prior outputs. " + reasoning) if incremental else reasoning}

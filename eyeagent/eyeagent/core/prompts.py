@@ -1,5 +1,4 @@
 from __future__ import annotations
-import os
 from pathlib import Path
 from typing import Dict, Any, Optional
 import yaml
@@ -33,6 +32,10 @@ DEFAULT_PROMPTS: Dict[str, Any] = {
             "You are the report agent. Consolidate findings into a final summary paragraph for clinicians, "
             "including diagnoses and management recommendations."
         ),
+        # UI incremental mode hint (the agents already implement incremental behavior via context flags)
+        "__INCREMENTAL_MODE__": (
+            "When context.incremental==true, agents should process only new images (context.new_image_ids) and merge results with prior outputs."
+        )
     },
     "ui": {
         "instruction_presets": [
@@ -48,9 +51,8 @@ DEFAULT_PROMPTS: Dict[str, Any] = {
 
 class PromptsConfig:
     def __init__(self, base_dir: Optional[str] = None):
-        # Determine config path precedence
-        # 1) EYEAGENT_CONFIG_DIR, else 2) repo root (cases parent), else 3) CWD
-        from eyeagent.tracing.trace_logger import TraceLogger
+        # Determine config path precedence without env vars
+        from eyeagent.trace.trace_logger import TraceLogger
         t = TraceLogger()
         cases_dir = Path(t.base_dir)
         repo_root = cases_dir.parent if cases_dir.name == "cases" else Path.cwd()
@@ -58,14 +60,10 @@ class PromptsConfig:
         # Prefer eyeagent/config; fallback to repo_root/config
         default_cfg_dir = base / "eyeagent" / "config"
         legacy_cfg_dir = base / "config"
-        self.config_dir = Path(os.getenv("EYEAGENT_CONFIG_DIR", str(default_cfg_dir if default_cfg_dir.exists() else legacy_cfg_dir)))
+        self.config_dir = Path(str(default_cfg_dir if default_cfg_dir.exists() else legacy_cfg_dir))
         self.config_dir.mkdir(parents=True, exist_ok=True)
-        # Allow overriding via EYEAGENT_PROMPTS_FILE and support JSON
-        env_file = os.getenv("EYEAGENT_PROMPTS_FILE")
-        if env_file:
-            self.file_path = Path(env_file)
-        else:
-            self.file_path = self.config_dir / "prompts.yml"
+        # Canonical prompts file path
+        self.file_path = self.config_dir / "prompts.yml"
 
     def load(self) -> Dict[str, Any]:
         data: Dict[str, Any] = {}

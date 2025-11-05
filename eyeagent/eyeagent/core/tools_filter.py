@@ -5,8 +5,8 @@ import json
 import re
 from pathlib import Path
 from .settings import Settings
-from ..tools.tool_registry import role_tool_ids as _role_tool_ids  # type: ignore
-from ..tools.tool_registry import TOOL_REGISTRY  # type: ignore
+from eyeagent.tools.tool_registry import role_tool_ids as _role_tool_ids  # type: ignore
+from eyeagent.tools.tool_registry import TOOL_REGISTRY  # type: ignore
 
 # Config structure expected (in eyeagent.yml):
 # tools_filter:

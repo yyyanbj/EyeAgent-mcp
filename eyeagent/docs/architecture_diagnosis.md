@@ -106,7 +106,7 @@ eyeagent/
   tools/
     tool_registry.py              # 工具元数据 & 查询（支持按配置筛选）
     langchain_mcp_tools.py
-  tracing/
+  trace/
     trace_logger.py               # 统一事件/报告持久化
   ui/
     app.py

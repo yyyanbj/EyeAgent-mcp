@@ -1,0 +1,32 @@
+profiles:
+  # Full workflow including symptom intake/triage
+  triage:
+    steps:
+      - name: orchestrator
+      - name: symptom_triage
+      - name: image_analysis
+      - name: specialist
+      - name: knowledge
+      - name: follow_up
+      - name: report
+
+  # Imaging-focused workflow (CFP/OCT/FFA etc.), no symptom triage
+  imaging:
+    steps:
+      - name: orchestrator
+      - name: image_analysis
+      - name: specialist
+      - name: knowledge
+      - name: follow_up
+      - name: report
+
+  # Keep default pointing to triage for now for backward compatibility
+  default:
+    steps:
+      - name: orchestrator
+      - name: symptom_triage
+      - name: image_analysis
+      - name: specialist
+      - name: knowledge
+      - name: follow_up
+      - name: report

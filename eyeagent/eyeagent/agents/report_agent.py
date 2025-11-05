@@ -1,6 +1,7 @@
 from typing import Any, Dict, List
 from .base_agent import BaseAgent as DiagnosticBaseAgent
 from .registry import register_agent
+from loguru import logger
 
 @register_agent
 class ReportAgent(DiagnosticBaseAgent):
@@ -48,6 +49,12 @@ class ReportAgent(DiagnosticBaseAgent):
                     for it in items:
                         if isinstance(it, dict):
                             kn_items.append(it)
+                        else:
+                            # Keep robust: log unexpected item shapes for debugging
+                            try:
+                                logger.debug(f"Ignoring non-dict knowledge item: {type(it).__name__}")
+                            except Exception:
+                                pass
 
         # Prefer per-image specialist grading if available
         per_sp = (specialist.get("per_image") or {}).get("disease_grades") or {}
@@ -110,7 +117,19 @@ class ReportAgent(DiagnosticBaseAgent):
         knowledge_agg = None
         if kn_items:
             # Limit to a few top items if many
-            sample_items = kn_items[:5]
+            # Optionally dedupe by a simple key if present (title/id/source)
+            deduped: List[Dict[str, Any]] = []
+            seen = set()
+            for it in kn_items:
+                key = None
+                if isinstance(it, dict):
+                    key = it.get("title") or it.get("id") or it.get("source")
+                if key and key in seen:
+                    continue
+                if key:
+                    seen.add(key)
+                deduped.append(it)
+            sample_items = deduped[:5]
             knowledge_agg = {"queries": kn_queries or None, "items": sample_items}
 
         outputs = {

@@ -6,7 +6,6 @@ new tools. Deprecated tools are kept (not deleted) unless explicitly removed by 
 """
 from __future__ import annotations
 from typing import Dict, Any, List, Optional
-import os
 import json
 from pathlib import Path
 
@@ -14,12 +13,12 @@ from pathlib import Path
 class ToolsDescriptionRegistry:
     def __init__(self, base_dir: Optional[str] = None):
         # default under repo_root/config/tools_descriptions.json
-        from eyeagent.tracing.trace_logger import TraceLogger
+        from eyeagent.trace.trace_logger import TraceLogger
         t = TraceLogger()
         cases_dir = Path(t.base_dir)
         repo_root = cases_dir.parent if cases_dir.name == "cases" else Path.cwd()
         base = Path(base_dir) if base_dir else repo_root
-        self.config_dir = Path(os.getenv("EYEAGENT_CONFIG_DIR", base / "config"))
+        self.config_dir = Path(base / "config")
         self.config_dir.mkdir(parents=True, exist_ok=True)
         self.file_path = self.config_dir / "tools_descriptions.json"
 

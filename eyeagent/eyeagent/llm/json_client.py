@@ -8,7 +8,7 @@ from dotenv import load_dotenv
 from langchain_openai import ChatOpenAI
 from langchain_core.language_models.chat_models import BaseChatModel
 from pydantic import BaseModel
-from ..metrics.metrics import add_tokens
+from eyeagent.metrics.metrics import add_tokens
 
 # Ensure .env is loaded and keys propagated
 load_dotenv()

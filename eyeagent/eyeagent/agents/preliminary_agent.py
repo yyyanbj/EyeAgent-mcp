@@ -1,7 +1,8 @@
 from typing import Any, Dict, List
 from .base_agent import BaseAgent
 from .registry import register_agent
-from ..config.tools_filter import filter_tool_ids, select_tool_ids
+from loguru import logger
+from eyeagent.core.tools_filter import filter_tool_ids, select_tool_ids
 
 
 @register_agent
@@ -37,6 +38,8 @@ class PreliminaryAgent(BaseAgent):
 
     async def a_run(self, context: Dict[str, Any]) -> Dict[str, Any]:
         images = context.get("images", [])
+        incremental = bool(context.get("incremental"))
+        new_ids_set = set(context.get("new_image_ids") or []) if incremental else set()
 
         # Config-first: derive allowed tools from config patterns, defaulting to base list
         filtered_allowed = select_tool_ids(self.__class__.__name__, base_tool_ids=self.allowed_tool_ids, role=self.role)
@@ -46,19 +49,23 @@ class PreliminaryAgent(BaseAgent):
         laterality_results: List[Dict[str, Any]] = []
         screening_results: List[Dict[str, Any]] = []
         knowledge_blocks: List[Dict[str, Any]] = []
+        knowledge_query = None
 
         # Always attempt modality and laterality for each image (if tools allowed)
         async with self._client_ctx() as client:
+            # Strict sequential order: modality first, then laterality
+            per_image_imgs = images
+            if incremental and new_ids_set:
+                per_image_imgs = [img for img in images if isinstance(img, dict) and (str(img.get("image_id") or img.get("path")) in new_ids_set)]
+
             if "classification:modality" in filtered_allowed:
-                # Ensure image_path is passed per-image
-                calls = await self.call_tool_per_image(client, "classification:modality", images, {})
+                calls = await self.call_tool_per_image(client, "classification:modality", per_image_imgs, {})
                 for c in calls:
                     c["reasoning"] = "Determine image modality"
                 tool_calls.extend(calls)
                 modality_results = calls
             if "classification:laterality" in filtered_allowed:
-                # Ensure image_path is passed per-image
-                calls = await self.call_tool_per_image(client, "classification:laterality", images, {})
+                calls = await self.call_tool_per_image(client, "classification:laterality", per_image_imgs, {})
                 for c in calls:
                     c["reasoning"] = "Determine eye laterality"
                 tool_calls.extend(calls)
@@ -78,17 +85,17 @@ class PreliminaryAgent(BaseAgent):
             kn_allowed = select_tool_ids(self.__class__.__name__, base_tool_ids=["rag:query", "web_search:pubmed", "web_search:tavily"], role=self.role)
             if kn_allowed:
                 # Construct a simple query from top screening labels if present
-                query = None
                 try:
                     out = (screening_results[0] or {}).get("output") if screening_results else None
                     if isinstance(out, dict):
                         probs = out.get("probabilities") if isinstance(out.get("probabilities"), dict) else out
                         if isinstance(probs, dict):
                             tops = sorted(probs.items(), key=lambda kv: float(kv[1] or 0), reverse=True)[:3]
-                            query = ", ".join([k for k, _ in tops])
-                except Exception:
-                    query = None
-                plan = await self.plan_tools(f"If helpful, fetch brief knowledge for: {query or 'ophthalmology screening findings'}", kn_allowed)
+                            knowledge_query = ", ".join([k for k, _ in tops])
+                except Exception as e:
+                    logger.exception(f"Failed to build preliminary knowledge query: {e}")
+                    knowledge_query = None
+                plan = await self.plan_tools(f"If helpful, fetch brief knowledge for: {knowledge_query or 'ophthalmology screening findings'}", kn_allowed)
                 for step in (plan or []):
                     tid = step.get("tool_id")
                     if tid not in kn_allowed:
@@ -108,7 +115,7 @@ class PreliminaryAgent(BaseAgent):
             "modality_results": modality_results,
             "laterality_results": laterality_results,
             "screening_results": screening_results,
-            "knowledge": {"query": query, "items": knowledge_blocks} if knowledge_blocks else None,
+            "knowledge": {"query": knowledge_query, "items": knowledge_blocks} if knowledge_blocks else None,
         }
 
         # Append trace event for UI streaming consistency

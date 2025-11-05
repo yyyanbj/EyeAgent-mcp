@@ -25,7 +25,6 @@ class ModelConfig:
     """Configuration for the agent model being benchmarked."""
     workflow_backend: str = "langgraph"
     mcp_server_url: str = "http://localhost:8000/mcp/"
-    dry_run: bool = False
     enable_format_agent: bool = True
 
 

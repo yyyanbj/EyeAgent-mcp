@@ -1,7 +1,8 @@
 from typing import Any, Dict, List
 from .base_agent import BaseAgent as DiagnosticBaseAgent
 from .registry import register_agent
-from ..config.tools_filter import select_tool_ids
+from eyeagent.core.tools_filter import select_tool_ids
+from loguru import logger
 
 
 @register_agent
@@ -57,7 +58,15 @@ class MultimodalAgent(DiagnosticBaseAgent):
                 for c in calls:
                     tool_calls.append(c)
                     img_id = c.get("image_id") or "_"
-                    conversions.setdefault(img_id, {}).setdefault(tid, c.get("output"))
+                    # Prefer successful outputs; if failed or missing, surface concise error for UI
+                    out = c.get("output")
+                    status = c.get("status")
+                    if status == "success" and out is not None:
+                        conversions.setdefault(img_id, {})[tid] = out
+                    else:
+                        err = c.get("error") or ("missing output" if out is None else None)
+                        logger.debug(f"Multimodal conversion failed for {tid} on {img_id}: {err}")
+                        conversions.setdefault(img_id, {})[tid] = {"status": status or "failed", "error": err}
 
         # Build a concise narrative
         num_imgs = len(images) if isinstance(images, list) else 0

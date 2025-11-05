@@ -13,37 +13,28 @@ from loguru import logger
 from fastmcp import Client
 import os
 
-from ..tracing.trace_logger import TraceLogger
-from ..metrics.metrics import tool_timer, add_tokens
-from ..tools.tool_registry import get_tool
-from ..config.prompts import PromptsConfig
-from ..config.settings import build_chat_model, get_llm_config
-from ..config.settings import get_knowledge_config
-from ..llm.json_client import JsonLLM
-from ..llm.models import ToolPlan, ReasoningOut
-from ..tools.langchain_mcp_tools import build_langchain_mcp_tools, load_tools_from_mcp
+from eyeagent.trace.trace_logger import TraceLogger
+from eyeagent.metrics.metrics import tool_timer, add_tokens
+from eyeagent.tools.tool_registry import get_tool
+from eyeagent.core.prompts import PromptsConfig
+from eyeagent.core.settings import build_chat_model, get_llm_config, Settings
+from eyeagent.core.settings import get_knowledge_config
+from eyeagent.llm.json_client import JsonLLM
+from eyeagent.llm.models import ToolPlan, ReasoningOut
+from eyeagent.tools.langchain_mcp_tools import build_langchain_mcp_tools, load_tools_from_mcp
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage, ToolMessage
 from langchain_openai import ChatOpenAI
 from contextlib import asynccontextmanager
 
 
 class BaseAgent:
-    # Capabilities declaration (subclasses should override as needed)
-    capabilities: dict = {
-        "required_context": [],
-        "expected_outputs": [],
-        "retry_policy": {"max_attempts": 1, "on_fail": "fail"},
-        "modalities": [],
-        "tools": [],
-    }
-
     """Base class for diagnostic agents with reasoning and trace hooks.
 
     Input context: patient, images, and accumulated intermediate results.
     Output contract: {"agent", "role", "outputs": {...}, "tool_calls": [...], "reasoning": str}
     """
-    role: str = "generic"
-    name: str = "GenericDiagnosticAgent"
+    role: str = "diagnostic"
+    name: str = "DiagnosticAgent"
     # tool_id list from tool registry
     allowed_tool_ids: List[str] = []
     system_prompt: str = "You are a diagnostic agent."
@@ -61,37 +52,47 @@ class BaseAgent:
         if self.__class__.llm is None:
             try:
                 self.__class__.llm = build_chat_model(cfg_agent_name)
-            except Exception:
+            except Exception as e:
+                # Don't fail construction on model build; record and continue with None
+                logger.exception(f"build_chat_model failed for {cfg_agent_name}: {e}")
                 self.__class__.llm = None
-        # Load system prompt override from config if present
+        # Load system prompt override: prefer Settings().load()[prompts.system_prompts] then prompts.yml
         try:
-            cfg = PromptsConfig()
-            sp = cfg.get_system_prompt(self.__class__.__name__)
+            s_cfg = Settings().load()
+            sp_map = ((s_cfg.get("prompts") or {}).get("system_prompts") or {})
+            sp = sp_map.get(self.__class__.__name__)
             if sp:
                 self.system_prompt = sp
-        except Exception:
-            pass
+            else:
+                cfg = PromptsConfig()
+                sp2 = cfg.get_system_prompt(self.__class__.__name__)
+                if sp2:
+                    self.system_prompt = sp2
+        except Exception as e:
+            # Fall back to prompts.yml when Settings() fails
+            logger.warning(f"Failed to load system_prompt from Settings; falling back to PromptsConfig: {e}")
+            try:
+                cfg = PromptsConfig()
+                sp2 = cfg.get_system_prompt(self.__class__.__name__)
+                if sp2:
+                    self.system_prompt = sp2
+            except Exception as e2:
+                logger.warning(f"Failed to load system_prompt from PromptsConfig: {e2}")
         # Knowledge usage config
         self._knowledge_calls = 0
         try:
             kn = get_knowledge_config()
             self._knowledge_top_k_default = int(kn.get("default_top_k", 3))
             self._knowledge_max_calls = int(kn.get("max_calls_per_agent", 2))
-        except Exception:
+        except Exception as e:
+            logger.warning(f"Failed to load knowledge config; using defaults. Error: {e}")
             self._knowledge_top_k_default = 3
             self._knowledge_max_calls = 2
 
-    def _dry_run(self) -> bool:
-        return os.getenv("EYEAGENT_DRY_RUN", "0").lower() in ("1", "true", "yes")
-
     @asynccontextmanager
     async def _client_ctx(self):
-        """Yield a real MCP client unless DRY-RUN is enabled.
+        """Yield a real MCP client unless DRY-RUN is enabled."""
 
-        In DRY-RUN mode, yield None and avoid any network connection attempts."""
-        if self._dry_run():
-            yield None
-            return
         async with Client(self.mcp_url) as client:
             yield client
 
@@ -119,49 +120,21 @@ class BaseAgent:
                 safe_args.pop("disease", None)
             arguments = safe_args
             event_base["arguments"] = arguments
-        except Exception:
-            # If sanitization fails, proceed with original arguments
-            pass
+        except Exception as e:
+            # If sanitization fails, proceed with original arguments but log for observability
+            logger.exception(f"Argument sanitization failed for tool_id={tool_id}: {e}")
         # Preflight: if a local image_path is required but doesn't exist (and not in DRY-RUN), fail fast
         try:
-            if not self._dry_run():
-                img_path = (arguments or {}).get("image_path")
-                if img_path and isinstance(img_path, str) and not os.path.exists(img_path):
-                    err = f"File not found: {img_path}"
-                    event = {**event_base, "status": "failed", "error": err}
-                    self.trace_logger.append_event(self.case_id, event)
-                    return {"tool_id": tool_id, "arguments": arguments, "output": None, "status": "failed", "error": err, "version": meta.get("version") if meta else None}
-        except Exception:
-            # If preflight itself errors, continue to normal flow
-            pass
-        # DRY-RUN: return mock outputs without calling MCP
-        if self._dry_run():
-            role = (meta or {}).get("role")
-            mock: Dict[str, Any] = {"mock": True}
-            try:
-                if role == "specialist":
-                    mock.update({
-                        "disease": meta.get("disease") or "unknown",
-                        "probability": 0.0,
-                        "predicted": False,
-                        "all_probabilities": {"negative": 1.0},
-                        "grade": "ungraded",
-                        "confidence": 0.0
-                    })
-                elif isinstance(tool_id, str) and tool_id.startswith("classification:cfp_quality"):
-                    mock.update({"prediction": "good", "probabilities": {"good": 0.8, "poor": 0.2}})
-                elif isinstance(tool_id, str) and tool_id.startswith("classification:cfp_age"):
-                    mock.update({"task": "cfp_age", "prediction": 62, "unit": "years"})
-                elif isinstance(tool_id, str) and tool_id.startswith("classification:multidis"):
-                    mock.update({"probabilities": {"DR": 0.12, "AMD": 0.08, "Glaucoma": 0.05}})
-                elif isinstance(tool_id, str) and tool_id.startswith("segmentation:"):
-                    mock.update({"counts": {}})
-            except Exception:
-                pass
-            std = self._standardize_output(tool_id, mock, meta)
-            event = {**event_base, "status": "success", "output": std, "dry_run": True}
-            self.trace_logger.append_event(self.case_id, event)
-            return {"tool_id": tool_id, "arguments": arguments, "output": std, "status": "success", "version": meta.get("version") if meta else None}
+            img_path = (arguments or {}).get("image_path")
+            if img_path and isinstance(img_path, str) and not os.path.exists(img_path):
+                err = f"File not found: {img_path}"
+                event = {**event_base, "status": "failed", "error": err}
+                self.trace_logger.append_event(self.case_id, event)
+                return {"tool_id": tool_id, "arguments": arguments, "output": None, "status": "failed", "error": err, "version": meta.get("version") if meta else None}
+        except Exception as e:
+            # If preflight itself errors, continue to normal flow but record
+            logger.exception(f"Preflight check failed for tool_id={tool_id}: {e}")
+        
         try:
             if not meta:
                 raise ValueError(f"Unknown tool_id={tool_id}")
@@ -201,6 +174,7 @@ class BaseAgent:
                 result["mcp_meta"] = mcp_meta
             return result
         except Exception as e:
+            logger.exception(f"Tool call failed for tool_id={tool_id}")
             event = {**event_base, "status": "failed", "error": str(e)}
             self.trace_logger.append_event(self.case_id, event)
             return {"tool_id": tool_id, "arguments": arguments, "output": None, "status": "failed", "error": str(e), "version": meta.get("version") if meta else None}
@@ -216,6 +190,7 @@ class BaseAgent:
     async def call_tool_per_image(self, client: Client | None, tool_id: str, images: List[Dict[str, Any]], arguments: Dict[str, Any] | None = None) -> List[Dict[str, Any]]:
         """Call a tool for each image (or once if images empty) and attach image_id.
 
+        Strictly sequential execution is enforced to preserve deterministic order.
         When client is None (dry-run context manager yields None), _call_tool handles dry-run.
         """
         calls: List[Dict[str, Any]] = []
@@ -225,7 +200,11 @@ class BaseAgent:
             if isinstance(img, dict) and img.get("path"):
                 # Always prefer the real image path from context over any placeholder from planner
                 args["image_path"] = img.get("path")
-            tc = await self._call_tool(client, tool_id, args)
+            try:
+                tc = await self._call_tool(client, tool_id, args)
+            except Exception as e:
+                # Convert exception into a failed call record for trace completeness
+                tc = {"tool_id": tool_id, "arguments": args, "output": None, "status": "failed", "error": str(e)}
             if isinstance(img, dict):
                 tc["image_id"] = img.get("image_id") or img.get("path")
             calls.append(tc)
@@ -239,9 +218,6 @@ class BaseAgent:
         """
         available = available or []
         if not available:
-            return []
-        # DRY-RUN: skip LLM planner so agents fall back to their static plans
-        if self._dry_run():
             return []
         # Build tool description hint
         desc_lines: List[str] = []
@@ -280,7 +256,8 @@ class BaseAgent:
                         "reasoning": step.reasoning,
                     })
             return out
-        except Exception:
+        except Exception as e:
+            logger.exception(f"Structured planning failed for {self.name}: {e}")
             # Fallback to plain JSON
             try:
                 schema = '{"plan": [{"tool_id": "...", "arguments": {}, "reasoning": "..."}]}'
@@ -301,7 +278,8 @@ class BaseAgent:
                             "reasoning": step.get("reasoning")
                         })
                 return out
-            except Exception:
+            except Exception as e2:
+                logger.exception(f"JSON planning failed for {self.name}: {e2}")
                 return []
 
     def gen_reasoning(self, context_summary: str, schema_hint: Optional[str] = None) -> str:
@@ -309,9 +287,6 @@ class BaseAgent:
 
         Returns the 'reasoning' field from JSON; falls back to input summary on failure.
         """
-        # DRY-RUN: return the summary directly
-        if self._dry_run():
-            return context_summary
         sys = f"You are the {self.name} ({self.role}). Provide concise medical reasoning."
         user = f"Context summary to explain concisely: {context_summary}"
         try:
@@ -319,15 +294,16 @@ class BaseAgent:
             parsed: ReasoningOut = llm.invoke_structured(sys, user, ReasoningOut)  # type: ignore[assignment]
             logger.debug(f"[{self.name}] reasoning structured parsed: {parsed}")
             return parsed.reasoning or parsed.narrative or context_summary
-        except Exception:
+        except Exception as e:
+            logger.exception(f"Structured reasoning failed for {self.name}: {e}")
             # Fallback to plain JSON
             try:
                 data = llm.invoke_json(system_prompt=sys, user_prompt=user, schema_hint='{"reasoning": "...", "narrative": "..."}')
                 logger.debug(f"[{self.name}] reasoning json parsed: {data}")
                 if isinstance(data, dict):
                     return str(data.get("reasoning") or data.get("narrative") or context_summary)
-            except Exception:
-                pass
+            except Exception as e2:
+                logger.exception(f"JSON reasoning failed for {self.name}: {e2}")
             return context_summary
 
     # ---- knowledge helpers -------------------------------------------------
@@ -343,8 +319,13 @@ class BaseAgent:
     def _knowledge_allowed(self) -> bool:
         try:
             return self._knowledge_calls < max(0, int(self._knowledge_max_calls))
-        except Exception:
-            return True
+        except Exception as e:
+            logger.warning(f"Knowledge allowance check failed; using safe default. Error: {e}")
+            # Conservative default: use constructor defaults (2 max calls)
+            try:
+                return self._knowledge_calls < max(0, int(getattr(self, "_knowledge_max_calls", 2)))
+            except Exception:
+                return self._knowledge_calls < 2
 
     def _note_knowledge_called(self) -> None:
         try:
@@ -374,8 +355,9 @@ class BaseAgent:
         # Build chat model using class-level LLM or fallback to settings
         llm = self.__class__.llm or build_chat_model(self.__class__.__name__)
 
-        # Build LangChain tool stubs for tool_calls; execution is handled by _call_tool for tracing
-        use_adapter = os.getenv("EYEAGENT_MCP_ADAPTER_BIND", "0").lower() in ("1", "true", "yes")
+        # Build LangChain tool stubs for tool_calls; execution is handled by _call_tool for trace
+        from eyeagent.core.settings import get_mcp_adapter_bind
+        use_adapter = bool(get_mcp_adapter_bind(False))
         logger.debug(f"[{self.name}] bind tools use_adapter={use_adapter} allowed={allowed_tool_ids}")
         # Map between our tool_ids and MCP tool names
         tid_to_mcp = {}
@@ -556,7 +538,8 @@ class BaseAgent:
 
             # Configurable max classes to keep in probabilities (for readability)
             try:
-                max_classes = int(os.getenv("EYEAGENT_MAX_CLASSES", "8"))
+                from eyeagent.core.settings import get_max_classes
+                max_classes = int(get_max_classes(8))
             except Exception:
                 max_classes = 8
 
@@ -611,7 +594,7 @@ class BaseAgent:
                         pass
                 # Attach disease names (full/abbr) based on tool_id
                 try:
-                    from ..tools.tool_registry import disease_names_for_tool  # type: ignore
+                    from eyeagent.tools.tool_registry import disease_names_for_tool  # type: ignore
                     names = disease_names_for_tool(tool_id)
                     if names:
                         out.setdefault("disease_names", names)

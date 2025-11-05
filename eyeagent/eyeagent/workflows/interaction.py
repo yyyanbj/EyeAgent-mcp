@@ -10,8 +10,8 @@ from typing import Any, Dict, List, Optional
 import os
 import asyncio
 
-from ..tracing.trace_logger import TraceLogger
-from ..core.interaction_engine import InteractionEngine
+from eyeagent.trace.trace_logger import TraceLogger
+from eyeagent.core.interaction_engine import InteractionEngine
 from loguru import logger
 
 SCHEMA_VERSION = "1.0.0"
@@ -44,7 +44,7 @@ def _default_spec() -> Dict[str, Any]:
     }
 
 
-async def run_diagnosis_async(patient: Dict[str, Any], images: List[Dict[str, Any]], spec: Optional[Dict[str, Any]] = None, trace: Optional[TraceLogger] = None, case_id: Optional[str] = None, messages: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
+async def run_diagnosis_async(patient: Dict[str, Any], images: List[Dict[str, Any]], spec: Optional[Dict[str, Any]] = None, trace: Optional[TraceLogger] = None, case_id: Optional[str] = None, messages: Optional[List[Dict[str, Any]]] = None, prior: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     trace = trace or TraceLogger()
     case_id = case_id or trace.create_case(patient=patient, images=images)
     state: WorkflowState = {
@@ -55,6 +55,23 @@ async def run_diagnosis_async(patient: Dict[str, Any], images: List[Dict[str, An
         "workflow": [],
         "messages": list(messages or [])
     }
+    # Hydrate incremental prior state if provided
+    if prior and isinstance(prior, dict):
+        for k in ("orchestrator_outputs","preliminary","image_analysis","specialist","knowledge","follow_up"):
+            if prior.get(k) is not None:
+                state[k] = prior.get(k)
+        # Compute new_image_ids for incremental routing if previous images provided
+        try:
+            prev_imgs = prior.get("images") or []
+            prev_ids = {str(i.get("image_id") or i.get("path")) for i in prev_imgs if isinstance(i, dict)}
+            cur_ids = {str(i.get("image_id") or i.get("path")) for i in images if isinstance(i, dict)}
+            new_ids = [x for x in cur_ids if x not in prev_ids]
+            if new_ids:
+                state["incremental"] = True
+                state["new_image_ids"] = new_ids
+                state["prev_image_ids"] = list(prev_ids)
+        except Exception:
+            pass
 
     engine = InteractionEngine(spec or _default_spec())
     result_state = await engine.ainvoke(state)

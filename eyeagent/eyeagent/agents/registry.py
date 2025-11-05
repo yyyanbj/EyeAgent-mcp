@@ -2,7 +2,7 @@ from __future__ import annotations
 from typing import Dict, Type, Optional, List
 from loguru import logger
 import importlib
-from ..config.settings import get_configured_agents
+from eyeagent.core.settings import get_configured_agents
 
 
 _REGISTRY: Dict[str, Type] = {}

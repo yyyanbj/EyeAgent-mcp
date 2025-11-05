@@ -5,14 +5,14 @@ from .registry import register_agent
 from fastmcp import Client
 from loguru import logger
 
-from ..tools.tool_registry import (
+from eyeagent.tools.tool_registry import (
     TOOL_REGISTRY,
     get_tool,
     role_tool_ids,
     specialist_tools,
 )
-from ..tools.tool_registry import resolve_specialist_tools  # type: ignore
-from ..config.tools_filter import filter_tool_ids
+from eyeagent.tools.tool_registry import resolve_specialist_tools  # type: ignore
+from eyeagent.core.tools_filter import filter_tool_ids
 
 
 @register_agent

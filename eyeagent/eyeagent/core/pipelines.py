@@ -1,5 +1,4 @@
 from __future__ import annotations
-import os
 import json
 from typing import Any, Dict, List, Optional
 from loguru import logger
@@ -18,42 +17,25 @@ def _read_file_text(path: str) -> str:
 
 
 def load_pipelines_config() -> Dict[str, Any]:
-    """Load pipeline profiles from YAML or JSON.
+    """Load pipeline profiles from the main settings.
 
-    Search order:
-    1) EYEAGENT_PIPELINES_FILE env
-    2) config/pipelines.yml
-    3) config/pipelines.json
+    Resolution order:
+    - Main settings (Settings().load()) under key 'pipelines' or top-level 'profiles'
     """
-    candidates = []
-    env_path = os.getenv("EYEAGENT_PIPELINES_FILE")
-    if env_path:
-        candidates.append(env_path)
-    # repo-relative defaults: prefer eyeagent/config then legacy config/
-    repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-    eye_cfg = os.path.join(repo_root, "eyeagent", "config")
-    legacy_cfg = os.path.join(repo_root, "config")
-    candidates.append(os.path.join(eye_cfg, "pipelines.yml"))
-    candidates.append(os.path.join(eye_cfg, "pipelines.json"))
-    candidates.append(os.path.join(legacy_cfg, "pipelines.yml"))
-    candidates.append(os.path.join(legacy_cfg, "pipelines.json"))
+    # Main settings only
+    try:
+        from .settings import Settings  # defer import to avoid cycles
+        cfg = Settings().load()
+        if isinstance(cfg, dict):
+            pipe = cfg.get("pipelines")
+            if isinstance(pipe, dict) and pipe.get("profiles"):
+                return pipe
+            prof = cfg.get("profiles")
+            if isinstance(prof, dict):
+                return {"profiles": prof}
+    except Exception:
+        pass
 
-    for p in candidates:
-        if not os.path.isfile(p):
-            continue
-        try:
-            text = _read_file_text(p)
-            if p.endswith(".yml") or p.endswith(".yaml"):
-                if not _HAS_YAML:
-                    logger.warning("pipelines file is YAML but PyYAML not installed; please `pip install pyyaml`")
-                    continue
-                data = yaml.safe_load(text) or {}
-            else:
-                data = json.loads(text)
-            if isinstance(data, dict):
-                return data
-        except Exception as e:
-            logger.warning(f"failed to load pipelines config from {p}: {e}")
     return {"profiles": {}}
 
 
@@ -84,6 +66,20 @@ def get_profile_steps(profile: str) -> List[Dict[str, Any]]:
         elif isinstance(s, dict) and "name" in s:
             out.append({"name": s.get("name"), "when": s.get("when")})
     return out
+
+
+def get_profile_raw(profile: str) -> Dict[str, Any]:
+        """Return the raw profile dict from config, including optional custom edges and node fields.
+
+        Shape (if present):
+            {
+                "steps": [ { name, when?, inputs?, outputs? }, ... ],
+                "edges": [ { from, to: [ { when?, next } ... ] }, ... ]
+            }
+        """
+        cfg = load_pipelines_config()
+        prof = (cfg.get("profiles") or {}).get(profile) if isinstance(cfg, dict) else None
+        return prof if isinstance(prof, dict) else {}
 
 
 def _get_by_path(state: Dict[str, Any], path: str) -> Any:

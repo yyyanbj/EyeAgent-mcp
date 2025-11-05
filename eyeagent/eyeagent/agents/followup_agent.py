@@ -1,7 +1,7 @@
 from typing import Any, Dict, List
 from .base_agent import BaseAgent as DiagnosticBaseAgent
 from .registry import register_agent
-from ..config.tools_filter import filter_tool_ids, select_tool_ids
+from eyeagent.core.tools_filter import filter_tool_ids, select_tool_ids
 from fastmcp import Client
 
 @register_agent

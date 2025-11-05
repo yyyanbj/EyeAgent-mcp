@@ -1,6 +1,6 @@
 # EyeAgent: Ophthalmology Diagnostic Workflow (MCP-powered)
 
-EyeAgent is a diagnostic workflow that orchestrates multiple agents (Orchestrator → Image Analysis → Specialist → Follow-up → Report) and integrates with MCP tools for image analysis and disease grading. It includes a CLI and an optional Gradio UI, structured tracing, and a final JSON report.
+EyeAgent is a diagnostic workflow that orchestrates multiple agents (Orchestrator → Image Analysis → Specialist → Follow-up → Report) and integrates with MCP tools for image analysis and disease grading. It includes a CLI and an optional Gradio UI, structured trace, and a final JSON report.
 
 ## Quick start
 
@@ -16,12 +16,7 @@ uv sync
   - or export DEEPSEEK_API_KEY=...
 - Ensure an MCP server exposing the required tools is running and reachable via MCP_SERVER_URL (default http://localhost:8000/mcp/)
 
-3) Run the CLI once:
-```bash
-uv run eyeagent-diagnose --patient '{"patient_id":"P001","age":63}' --images '[{"image_id":"IMG001","path":"/data/cfp1.jpg"}]'
-```
-
-4) Or launch the UI:
+3) Launch the UI:
 ```bash
 uv run eyeagent-ui
 ```
@@ -37,16 +32,87 @@ UI workflow backend selection:
 - Session default: pass a startup flag so the whole UI uses a backend by default (still overridable per run by dropdown):
 
 ```bash
-uv run eyeagent-ui --workflow-backend profile
+uv run eyeagent-ui --backend profile
 ```
 
 Outputs are written to cases/<case_id> by default (trace.json, final_report.json). Override with EYEAGENT_CASES_DIR or EYEAGENT_DATA_DIR.
 
-5) Optional: run the ophthalmology demo (includes knowledge step):
+4) Unified CLI (headless, config-driven)
+
+Run once with JSON input and a chosen backend/profile:
 
 ```bash
-uv run python -m eyeagent.run_ophthalmology_demo
+uv run eyeagent run \
+  --config eyeagent/eyeagent/config/eyeagent.triage.yml \
+  --backend profile \
+  --profile triage \
+  --patient '{"patient_id":"P001","age":63,"gender":"F"}' \
+  --images '[{"image_id":"IMG001","path":"/path/to/fundus.jpg"}]'
 ```
+
+Overrides via startup flags (no need to edit config file):
+- `--backend` to switch backend (langgraph | profile | interaction | single)
+- `--profile` to pick a pipeline profile when using the profile backend
+- `--spec` to pass a custom interaction spec file when using the interaction backend (YAML/JSON)
+- `--enable-agent role` / `--disable-agent role` to toggle agents for this run (can be repeated)
+
+Utilities:
+
+```bash
+# List available agents after loading config
+uv run eyeagent list-agents --config eyeagent/eyeagent/config/eyeagent.imaging.yml
+
+# Print the fully-resolved config EyeAgent will use
+uv run eyeagent print-config --config eyeagent/eyeagent/config/eyeagent.triage.yml
+```
+
+4) Headless benchmark (batch mode):
+
+Use the repository script `bin/run_benchmark.py` to process a JSONL file or scan an images directory. Examples:
+
+```bash
+# Triage profile, profile backend, LLM routing; input as JSONL
+python bin/run_benchmark.py \
+  --config-file eyeagent/eyeagent/config/eyeagent.triage.yml \
+  --profile triage --backend profile --routing llm \
+  --input-jsonl ./cases_list.jsonl \
+  --output-dir ./cases
+
+# Imaging-only profile; scan a directory of images
+python bin/run_benchmark.py \
+  --config-file eyeagent/eyeagent/config/eyeagent.imaging.yml \
+  --profile imaging --backend profile --routing llm \
+  --images-dir ./datasets/fundus --glob "*.jpg" \
+  --output-dir ./benchmark_out
+```
+
+### CLI incremental runs (append-only)
+
+You can continue a previous case from the CLI and process only newly added images. This preserves the same case ID and merges results with the prior run.
+
+Key flags:
+- `--case-id <ID>`: the existing case to continue (found under `cases/<ID>/`)
+- `--incremental`: enable incremental mode; only new images are processed
+
+Example:
+
+```bash
+uv run eyeagent run \
+  --config eyeagent/eyeagent/config/eyeagent.imaging.yml \
+  --case-id 01234567-89ab-cdef-0123-456789abcdef \
+  --incremental \
+  --images '[
+    {"image_id":"NEW_OD","path":"/data/cases/P002/new_OD.jpg"},
+    {"image_id":"NEW_OCT","path":"/data/cases/P002/new_OCT.png"}
+  ]'
+```
+
+Behavior and notes:
+- The CLI loads `cases/<case_id>/trace.json` and merges its `images` with the newly provided `--images` list (no duplicates by `image_id` fallback `path`).
+- If you don’t specify a backend, the CLI prefers `profile` in incremental mode to ensure `prior` is supported.
+- The workflow receives `prior={"images": images_prev}`; agents detect `context.incremental` and process only new images.
+- Patient object: if not provided for this run, it’s loaded from the previous case.
+- Image identity: matched by `image_id`, falling back to `path` when missing.
 
 ## Architecture (agents)
 - Orchestrator: infers modality/laterality and plans the pipeline
@@ -57,6 +123,92 @@ uv run python -m eyeagent.run_ophthalmology_demo
 - Report: consolidates everything into a clinician-friendly report
 
 All agents share a diagnostic base that handles MCP tool calls with trace logging and optional LLM reasoning. See `eyeagent/agents/` for details.
+
+## Multi-image input and per-image routing
+- Inputs: pass a list of images as `[{"image_id": "IMG001", "path": "/path/to/xxx.jpg"}, ...]`.
+- Single-image tools: every MCP tool accepts exactly one image. EyeAgent automatically fans out per image, choosing tools per image modality and running them in parallel.
+- Modality routing: `PreliminaryAgent` runs `classification:modality` and `classification:laterality` for each image; `ImageAnalysisAgent` then dispatches only CFP tools to CFP images, OCT tools to OCT images, and FFA tools to FFA images.
+- Aggregation: `ImageAnalysisAgent` returns `per_image` blocks (quality, lesions, diseases) and a merged summary; `SpecialistAgent` returns per-image grading; `ReportAgent` consolidates to the final fragment while preserving `per_image` details.
+
+Behavior with mixed modalities:
+- Example input containing both CFP and OCT images → IA will run `classification:cfp_quality` and `segmentation:cfp_*` on CFP images, `segmentation:oct_*` on OCT images; no cross-modality calls are made to wrong images.
+- If modality cannot be determined, CFP is used as a safe default for that specific image.
+
+Performance and concurrency:
+- Per-image analysis runs concurrently to minimize overall latency (async fan-out per image and tool).
+- You can globally disable heavy tools or restrict tools per agent via `eyeagent/config/tools.yml` or runtime filters to fit your environment.
+
+Examples
+
+- CLI with multiple images:
+
+```bash
+uv run eyeagent run \
+  --config eyeagent/eyeagent/config/eyeagent.imaging.yml \
+  --backend profile --profile imaging \
+  --patient '{"patient_id":"P002","age":58}' \
+  --images '[
+    {"image_id":"OD-1","path":"/data/cases/P002/OD.jpg"},
+    {"image_id":"OCT-1","path":"/data/cases/P002/OCT.png"}
+  ]'
+```
+
+- UI: upload multiple files in the Run Diagnosis tab; EyeAgent will auto-route each image by modality and show per-image tool calls in the chat panel.
+
+### Incremental runs (append images after a case is finished)
+
+UI supports appending new images to an existing case and processing only the new images:
+
+- Open the "Continue / Incremental" tab in the UI.
+- Enter the existing Case ID (from the first run; see cases/<case_id>/).
+- Upload additional images and optionally provide extra instruction.
+- Click "Append and Incremental Run".
+
+Under the hood:
+
+- The workflow is called with `prior` state (previous images and agent outputs).
+- Agents read `context.incremental` and `context.new_image_ids` and only process the new images; outputs are merged with prior results.
+- The chat panel streams only the newly added events; final report gets updated.
+
+Programmatic usage (optional)
+
+```python
+import json
+from pathlib import Path
+from eyeagent.diagnostic_workflow import run_diagnosis_async
+
+# Load prior state from an existing case
+CASES = Path('cases')
+case_id = 'YOUR_CASE_ID'
+doc = json.loads((CASES / case_id / 'trace.json').read_text(encoding='utf-8'))
+
+patient = doc.get('patient', {})
+images_prev = doc.get('images', [])
+# Append new images
+images_merged = list(images_prev) + [
+  {"image_id": "NEW_OD", "path": "/path/to/new_OD.jpg"},
+  {"image_id": "NEW_OCT", "path": "/path/to/new_OCT.png"},
+]
+
+prior = {
+  "images": images_prev,
+  "orchestrator_outputs": doc.get("orchestrator_outputs"),
+  "preliminary": doc.get("preliminary"),
+  "image_analysis": doc.get("image_analysis"),
+  "specialist": doc.get("specialist"),
+  "knowledge": doc.get("knowledge"),
+  "follow_up": doc.get("follow_up"),
+}
+
+# Reuse same case_id to keep a single trace
+final = await run_diagnosis_async(patient, images_merged, case_id=case_id, prior=prior)
+```
+
+Notes
+
+- Image identity is matched by `image_id` (fallback to `path` when missing). UI derives `image_id` from file name stem.
+- If a new upload shares the same `image_id` as an existing image, it is treated as already processed and skipped during incremental processing.
+- Incremental mode currently optimizes Preliminary/ImageAnalysis/Specialist steps; Report/Follow-up will re-synthesize a fresh final fragment with merged per-image details.
 
 ## Configuration
 - Prompts: `eyeagent/config/prompts.yml` (override system prompts, UI presets)
@@ -82,7 +234,6 @@ uv run eyeagent-ui --mcp-url "http://localhost:8000/mcp" --port 7860
 
 Environment knobs:
 - EYEAGENT_LOG_LEVEL, EYEAGENT_LOG_FILE, EYEAGENT_LOG_FORMAT
-- EYEAGENT_DRY_RUN=1 to bypass real MCP calls and LLM planning/reasoning
 - EYEAGENT_USE_LANGGRAPH=1 to prefer LangGraph; 0 uses a simple fallback runner (deprecated; prefer config)
 - EYEAGENT_PIPELINE_PROFILE selects a pipeline from pipelines.yml (optional)
 - EYEAGENT_MCP_ADAPTER_BIND=1 to use langchain-mcp-adapters tool binding
@@ -102,13 +253,20 @@ We provide multiple orchestration backends under `eyeagent/workflows/`:
 - LangGraph (default): `eyeagent/workflows/langgraph.py`
   - Public API: `run_diagnosis_async`, `run_diagnosis`
   - Default entry re-export: `eyeagent/diagnostic_workflow.py`
-- Profile-driven: `eyeagent/workflows/profile.py`
+- Profile-driven (pipelines unified入口): `eyeagent/workflows/profile.py`
   - Uses `eyeagent/config/pipelines.yml` to define a step list with optional conditions
   - Public API: `run_diagnosis_async`, `run_diagnosis`
   - Select profile with `EYEAGENT_PIPELINE_PROFILE` (default: `default`)
 - Spec/interaction-driven: `eyeagent/workflows/interaction.py`
   - Accepts a custom spec (nodes/edges) or falls back to a simple orchestrator-led sequence
   - Public API: `run_diagnosis_async`, `run_diagnosis`
+  
+- Topology-driven: `eyeagent/workflows/topology.py`
+  - Lightweight执行器，支持 star/ring 两类拓扑，不依赖 LangGraph
+  - 通过环境变量或 settings.workflow.topology 配置：
+    - EYEAGENT_TOPOLOGY: star|ring（默认 ring）
+    - EYEAGENT_TOPOLOGY_AGENTS: 逗号分隔的 agent 角色列表（环形顺序 / 星型集合）
+    - EYEAGENT_TOPOLOGY_ROUNDS: 环形轮数（默认 1）
 
 Example usage:
 
@@ -131,7 +289,7 @@ To select backend globally without changing imports, set in `eyeagent/config/eye
 
 ```yaml
 workflow:
-  backend: langgraph   # or: profile | interaction
+  backend: langgraph   # or: profile | interaction | topology | single
 ```
 
 Or via environment variable for the current process:
@@ -140,18 +298,13 @@ Or via environment variable for the current process:
 export EYEAGENT_WORKFLOW_BACKEND=profile
 ```
 
-CLI one-off override (no config change):
-
-```bash
-uv run eyeagent-diagnose \
-  --workflow-backend profile \
-  --patient '{"patient_id":"P001","age":63}' \
-  --images '[{"image_id":"IMG001","path":"/data/cfp1.jpg"}]'
-```
+CLI one-off override for the UI (set for the process only): pass `--backend` when launching `eyeagent-ui`.
 
 ## Development notes
-- CLI entrypoints:
-  - eyeagent-diagnose → `eyeagent/run_diagnosis.py:main`
+Supported entry modes:
+  - eyeagent-ui → `eyeagent/ui/app.py:main`
+  - Unified CLI → `eyeagent/cli.py:main` (console script `eyeagent`)
+  - Headless benchmark → `bin/run_benchmark.py`
 
 ## Multi-agent topologies (star & ring)
 
@@ -208,16 +361,13 @@ if __name__ == "__main__":
 
 You can adapt these callables to wrap your existing agents (`eyeagent/agents/*.py`) by writing thin async adapters that accept and return partial state updates.
   - eyeagent-ui → `eyeagent/ui/app.py:main`
-- Tests: `eyeagent/tests/test_smoke_dry_run.py` (uses dry run)
-- Tracing: `eyeagent/tracing/trace_logger.py`
+  
+- Tracing: `eyeagent/trace/trace_logger.py`
 - MCP registry: `eyeagent/tools/tool_registry.py` (+ overlay)
 
   ### Examples (non-core)
   - Generic multi-agent + MCP demo lives in the repository top-level `examples/` only.
-  - In-package re-exports/shims have been removed to avoid duplication.
-  - Launch the demo UI (optional):
-    - Run the top-level script: `python examples/run_multiagent.py`
-      - Note: In-package shims `eyeagent/run_multiagent.py` and `eyeagent/multiagent_framework.py` were removed. Use the examples at repo root.
+  - In-package re-exports/shims and demo runners were removed to avoid duplication.
 
 ## MCP tool expectations (examples)
 - classification:modality (CFP/OCT/FFA), classification:laterality, classification:cfp_quality

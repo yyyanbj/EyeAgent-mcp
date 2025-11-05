@@ -10,9 +10,11 @@ import html
 import gradio as gr
 from loguru import logger
 
-from eyeagent.tracing.trace_logger import TraceLogger
-from eyeagent.config.prompts import PromptsConfig
-from eyeagent.config.tools_description import ToolsDescriptionRegistry
+from eyeagent.trace.trace_logger import TraceLogger
+from eyeagent.core.runtime import add_common_runtime_flags, apply_runtime_env_from_args
+from eyeagent.core.settings import set_overrides, get_workflow_backend as _get_wf_backend, get_cases_dir
+from eyeagent.core.prompts import PromptsConfig
+from eyeagent.core.tools_description import ToolsDescriptionRegistry
 from eyeagent.tools.tool_registry import current_server_tools
 
 
@@ -30,14 +32,11 @@ function refresh() {
 
 
 def _find_cases_dir() -> Path:
-    env_cases = os.getenv("EYEAGENT_CASES_DIR")
-    env_data = os.getenv("EYEAGENT_DATA_DIR")
-    if env_cases:
-        return Path(env_cases)
-    if env_data:
-        return Path(env_data) / "cases"
-    t = TraceLogger()
-    return Path(t.base_dir)
+    try:
+        return Path(get_cases_dir())
+    except Exception:
+        t = TraceLogger()
+        return Path(t.base_dir)
 
 
 def _agent_icon(agent: str, role: str) -> str:
@@ -558,9 +557,9 @@ def _embed_images_html(paths: List[str], max_images: int = 4, thumb_w: int = 240
 
 
 async def _run_and_stream(patient: Dict[str, Any], image_paths: List[str], progress: gr.Progress, chatbot: gr.Chatbot, initial_messages: Optional[List[Dict[str, str]]] = None, workflow_backend: Optional[str] = None) -> AsyncGenerator[Tuple[List[Dict[str, str]], Dict[str, Any] | str | None], None]:
-    # Respect per-run workflow backend (if provided) and MCP_SERVER_URL passed via CLI before importing workflow
+    # Respect per-run workflow backend (if provided) via in-process overrides
     if workflow_backend:
-        os.environ["EYEAGENT_WORKFLOW_BACKEND"] = workflow_backend
+        set_overrides(workflow_backend=workflow_backend)
     from eyeagent.diagnostic_workflow import run_diagnosis_async
     trace = TraceLogger()
     try:
@@ -805,7 +804,7 @@ async def _continue_and_stream(case_id: str, additional_instruction: str, progre
 
     # Continue by invoking pipeline again, appending to same case
     trace = TraceLogger(base_dir=str(cases_dir))
-    task = asyncio.create_task(run_diagnosis_async(patient, images_meta, trace=trace, case_id=case_id, messages=llm_messages))
+    task = asyncio.create_task(run_diagnosis_async(patient, images_meta, trace=trace, case_id=case_id, messages=llm_messages, prior={"images": images_meta, "orchestrator_outputs": doc.get("orchestrator_outputs"), "preliminary": doc.get("preliminary"), "image_analysis": doc.get("image_analysis"), "specialist": doc.get("specialist"), "knowledge": doc.get("knowledge"), "follow_up": doc.get("follow_up")}))
     last_count = len(doc.get("events", []))
 
     while not task.done():
@@ -825,6 +824,87 @@ async def _continue_and_stream(case_id: str, additional_instruction: str, progre
     result = await task
     messages.append({"role": "system", "content": "Continuation completed."})
     yield messages, result
+
+
+async def _append_and_incremental_run(case_id: str, new_files: List[Any], additional_instruction: str, progress: gr.Progress) -> AsyncGenerator[Tuple[List[Dict[str, str]], Dict[str, Any] | None], None]:
+    """Append new images to an existing case and run incrementally (process only new images).
+
+    Streams new events and returns the final report.
+    """
+    # Force a backend that supports 'prior' incremental mode (profile)
+    set_overrides(workflow_backend="profile")
+    from eyeagent.diagnostic_workflow import run_diagnosis_async
+    cases_dir = _find_cases_dir()
+    trace_path = cases_dir / case_id / "trace.json"
+    if not trace_path.exists():
+        yield ([{"role": "system", "content": f"Case {case_id} not found."}]), None
+        return
+    with open(trace_path, "r", encoding="utf-8") as f:
+        doc = json.load(f)
+    patient = doc.get("patient", {})
+    images_meta = doc.get("images", [])
+    # Normalize files
+    file_paths: List[str] = []
+    for f in (new_files or []):
+        if isinstance(f, str):
+            file_paths.append(f)
+        elif isinstance(f, dict):
+            p = f.get("path") or f.get("name")
+            if isinstance(p, str):
+                file_paths.append(p)
+    new_images = [{"image_id": Path(p).stem, "path": p} for p in file_paths]
+    # Merge images, compute prior and new ids
+    prev_ids = {str(i.get("image_id") or i.get("path")) for i in images_meta if isinstance(i, dict)}
+    merged_images = list(images_meta)
+    for ni in new_images:
+        nid = str(ni.get("image_id") or ni.get("path"))
+        if nid not in prev_ids:
+            merged_images.append(ni)
+    # Update patient instruction
+    llm_messages: List[Dict[str, str]] = []
+    if additional_instruction:
+        patient = {**patient, "instruction": additional_instruction}
+        llm_messages.append({"role": "user", "content": additional_instruction})
+
+    # Prepare initial messages showing thumbnails for new images only
+    msgs = _events_to_messages(doc.get("events", []), case_id=case_id)
+    if file_paths:
+        thumbs_html = []
+        for p in file_paths:
+            try:
+                import base64
+                ext = Path(p).suffix.lower()
+                mime = 'image/jpeg' if ext in ('.jpg', '.jpeg') else 'image/png'
+                with open(p, 'rb') as f:
+                    b64 = base64.b64encode(f.read()).decode('ascii')
+                thumbs_html.append(f"<img src='data:{mime};base64,{b64}' style='width:120px;max-width:100%;height:auto;border:1px solid #ddd;border-radius:4px;margin-right:8px;' />")
+            except Exception:
+                pass
+        if thumbs_html:
+            msgs.append({"role": "user", "content": "<div style='margin-bottom:8px'>" + ''.join(thumbs_html) + "</div>"})
+    yield msgs, None
+
+    # Run incrementally by providing prior state
+    trace = TraceLogger(base_dir=str(cases_dir))
+    prior = {"images": images_meta, "orchestrator_outputs": doc.get("orchestrator_outputs"), "preliminary": doc.get("preliminary"), "image_analysis": doc.get("image_analysis"), "specialist": doc.get("specialist"), "knowledge": doc.get("knowledge"), "follow_up": doc.get("follow_up")}
+    task = asyncio.create_task(run_diagnosis_async(patient, merged_images, trace=trace, case_id=case_id, messages=llm_messages, prior=prior))
+    last_count = len(doc.get("events", []))
+    while not task.done():
+        await asyncio.sleep(0.5)
+        try:
+            with open(trace_path, "r", encoding="utf-8") as f:
+                cur = json.load(f)
+            events = cur.get("events", [])
+            if len(events) > last_count:
+                new_msgs = _events_to_messages(events[last_count:])
+                last_count = len(events)
+                msgs.extend(new_msgs)
+                yield msgs, ""
+        except Exception:
+            pass
+    result = await task
+    msgs.append({"role": "system", "content": "Incremental run completed."})
+    yield msgs, result
 
 
 def build_interface() -> gr.Blocks:
@@ -874,7 +954,6 @@ def build_interface() -> gr.Blocks:
 
             # Workflow backend selector
             try:
-                from eyeagent.config.settings import get_workflow_backend as _get_wf_backend
                 _default_backend = _get_wf_backend()
             except Exception:
                 _default_backend = "langgraph"
@@ -1187,17 +1266,17 @@ def build_interface() -> gr.Blocks:
 
 def main():
     parser = argparse.ArgumentParser(description="EyeAgent UI")
-    parser.add_argument("--mcp-url", dest="mcp_url", help="MCP server base URL (e.g., http://localhost:8000/mcp/)")
-    parser.add_argument("--port", dest="port", type=int, default=None, help="UI server port (default 7860 or EYEAGENT_UI_PORT)")
-    parser.add_argument("--workflow-backend", dest="workflow_backend", choices=["langgraph", "profile", "interaction"], help="Select workflow backend for this UI session")
+    # Unified runtime flags (shared with CLI)
+    add_common_runtime_flags(parser, include_ui=True)
+    # UI-only temporary dir for Gradio artifacts
+    parser.add_argument("--ui-temp-dir", dest="ui_temp_dir", help="Temporary directory for Gradio (sets GRADIO_TEMP_DIR)")
     args = parser.parse_args()
 
-    # If provided, set MCP_SERVER_URL before any diagnostic workflow imports occur
-    if args.mcp_url:
-        os.environ["MCP_SERVER_URL"] = args.mcp_url
-    # Optional: set workflow backend for the entire UI session (can still be overridden per-run via dropdown)
-    if args.workflow_backend:
-        os.environ["EYEAGENT_WORKFLOW_BACKEND"] = args.workflow_backend
+    # Apply unified env mapping
+    apply_runtime_env_from_args(args)
+    # Additional UI-only env
+    if args.ui_temp_dir:
+        os.environ["GRADIO_TEMP_DIR"] = args.ui_temp_dir
 
     demo = build_interface()
     # determine repository root to allow serving media files generated outside CWD
@@ -1209,20 +1288,17 @@ def main():
         allowed.add(os.getenv("GRADIO_TEMP_DIR"))
     allowed.add("/tmp")
     # Enable Gradio request queue to better handle long-running responses and avoid timeouts.
-    # Configure via env vars if needed:
-    #   EYEAGENT_UI_CONCURRENCY: number of concurrent jobs processed by the queue (default 1)
-    #   EYEAGENT_UI_QUEUE_SIZE: maximum number of pending jobs in the queue (default 32)
-    #   EYEAGENT_UI_STATUS_RATE: seconds between status updates to clients (default 1.0)
+    # Use CLI args (preferred) instead of env vars.
     try:
-        concurrency = int(os.getenv("EYEAGENT_UI_CONCURRENCY", "1"))
+        concurrency = int(getattr(args, "ui_concurrency", None) or 1)
     except Exception:
         concurrency = 1
     try:
-        queue_size = int(os.getenv("EYEAGENT_UI_QUEUE_SIZE", "32"))
+        queue_size = int(getattr(args, "ui_queue_size", None) or 32)
     except Exception:
         queue_size = 32
     try:
-        status_rate = float(os.getenv("EYEAGENT_UI_STATUS_RATE", "1.0"))
+        status_rate = float(getattr(args, "ui_status_rate", None) or 1.0)
     except Exception:
         status_rate = 1.0
 
@@ -1238,7 +1314,7 @@ def main():
 
     demo.launch(
         server_name="0.0.0.0",
-        server_port=(args.port or int(os.getenv("EYEAGENT_UI_PORT", "7860"))),
+        server_port=(args.port or 7860),
         allowed_paths=list(allowed),
     )
 

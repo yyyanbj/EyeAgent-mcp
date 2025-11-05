@@ -70,10 +70,7 @@ def parse_args() -> argparse.Namespace:
 
 def _configure_environment(config: BenchmarkConfig) -> None:
     """Mirror the environment tweaks performed during a full benchmark run."""
-    if config.model.dry_run:
-        os.environ["EYEAGENT_DRY_RUN"] = "1"
-    else:
-        os.environ.pop("EYEAGENT_DRY_RUN", None)
+    # Dry-run mode removed; always use real execution per configuration
 
     if config.model.mcp_server_url:
         os.environ["MCP_SERVER_URL"] = config.model.mcp_server_url
@@ -174,9 +171,6 @@ async def rerun_failed_cases(args: argparse.Namespace) -> Dict[str, Any]:
         idx for idx, payload in stored_results.items() if payload.get("status") != "success"
     )
     rerun_targets = list(failed_indices_all)
-    if args.dry_run:
-        logger.info("Dry-run requested: skipping reruns, will only recompute metrics.")
-        rerun_targets = []
 
     rerun_records: Dict[int, Dict[str, Any]] = {}
 

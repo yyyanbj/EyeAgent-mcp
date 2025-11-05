@@ -1,17 +1,27 @@
 # EyeAgent configuration overrides
 # This file is merged onto built-in defaults in eyeagent/config/settings.py
-# Precedence for locating this file:
+# Precedence for locating this file (unified for UI and CLI):
 # - EYEAGENT_CONFIG_FILE (exact path)
 # - EYEAGENT_CONFIG_DIR/eyeagent.yml
 # - <repo_root>/eyeagent/config/eyeagent.yml (this file)
 # - <repo_root>/config/eyeagent.yml (legacy)
+#
+# Runtime env vars (shared by UI/CLI):
+# - EYEAGENT_WORKFLOW_BACKEND=langgraph|profile|interaction|single|topology
+# - EYEAGENT_PIPELINE_PROFILE=<profile_name>
+# - EYEAGENT_ROUTING_STRATEGY=llm|config
+# - EYEAGENT_MCP_ADAPTER_BIND=1
+# - EYEAGENT_MAX_CLASSES=<int>
+# - EYEAGENT_CASES_DIR=/abs/path  or  EYEAGENT_DATA_DIR=/abs/path (uses <DATA_DIR>/cases)
+# UI-specific:
+# - EYEAGENT_UI_PORT, EYEAGENT_UI_CONCURRENCY, EYEAGENT_UI_QUEUE_SIZE, EYEAGENT_UI_STATUS_RATE
 
 workflow:
-  # Options: unified | profile | graph | interaction
-  # - unified: single UnifiedAgent handles everything
+  # Preferred: set 'backend' (mode is still accepted for backward-compatibility)
+  # backend options: langgraph | profile | interaction | single | topology
   # - profile: use pipelines.yml profiles (recommended for multi-agent)
-  # - graph/interaction: advanced modes, optional
-  mode: profile
+  # - langgraph/interaction/single/topology: advanced execution backends
+  backend: profile
   specialist:
     # Candidate selection for SpecialistAgent when screening probabilities are available
     candidate_threshold: 0.3  # pick diseases with prob >= 0.3

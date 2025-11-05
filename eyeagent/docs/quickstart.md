@@ -10,22 +10,6 @@ Then in the repository root:
 uv sync
 ```
 
-## Run CLI (diagnosis)
-The package exposes a CLI entrypoint that runs the workflow once:
-
-```
-uv run eyeagent-diagnose \
-	--patient '{"patient_id":"P001","age":63}' \
-	--images '[{"image_id":"IMG001","path":"/path/to/cfp.jpg"}]'
-```
-
-To avoid calling external services while exploring, enable dry-run:
-
-```
-export EYEAGENT_DRY_RUN=1
-uv run eyeagent-diagnose --patient '{"patient_id":"P001"}' --images '[{"image_id":"I1","path":"/tmp/od.jpg"}]'
-```
-
 ## Run UI
 Launch a simple Gradio UI that streams tool/agent steps:
 
@@ -42,22 +26,30 @@ export EYEAGENT_PIPELINE_PROFILE=default
 uv run eyeagent-ui --mcp-url "http://localhost:8000/mcp" --port 7860
 ```
 
-## Test
+## Benchmark (batch mode)
+
+Use the repository script `bin/run_benchmark.py` for headless runs over many cases. Example:
+
+```
+python bin/run_benchmark.py \
+	--config-file eyeagent/eyeagent/config/eyeagent.imaging.yml \
+	--profile imaging --backend profile --routing llm \
+	--images-dir /data/fundus_eval
+```
+
 ## Knowledge step (RAG / PubMed)
 
 If your MCP server exposes the tools `rag:query` and `web_search:pubmed`, EyeAgent will run a knowledge step between specialist and follow-up when using the `default` profile.
 
-- Or use the demo runner:
-
-```
-uv run python -m eyeagent.run_ophthalmology_demo
-```
+The UI and benchmark flows will include knowledge between specialist and follow-up when the selected profile enables it.
 
 Tool contracts (normalized):
 - rag:query args: `{ "query": string, "top_k"?: number }` → `{ items: [{ title?, text?, source?, score? }], source: "rag" }`
 - web_search:pubmed args: `{ "query": string, "top_k"?: number }` → `{ items: [{ id?, title?, abstract?, url?, year? }], source: "pubmed" }`
 
 You can remap tool IDs via `eyeagent/config/tools.yml`.
+
+## Test
 ```
 uv run pytest -q
 ```

@@ -8,7 +8,7 @@ from typing import Dict, Any, List, TypedDict
 import os
 import asyncio
 from dotenv import load_dotenv
-from ..core.logging import setup_logging
+from eyeagent.core.logging import setup_logging
 
 # Load environment variables from .env, if present
 load_dotenv()
@@ -16,15 +16,15 @@ setup_logging()
 
 from langgraph.graph import StateGraph, START, END  # type: ignore
 
-from ..tracing.trace_logger import TraceLogger
+from eyeagent.trace.trace_logger import TraceLogger
+from eyeagent.core.settings import get_mcp_server_url
 from loguru import logger
-from ..agents.registry import register_builtins, get_agent_class
-from ..agents.capabilities import get_capabilities
-from ..metrics.metrics import step_timer
-from ..config.settings import get_specialist_selection_settings
-from ..core.diagnosis_utils import get_candidate_diseases_from_probs
+from eyeagent.agents.registry import register_builtins, get_agent_class
+from eyeagent.metrics.metrics import step_timer
+from eyeagent.core.settings import get_specialist_selection_settings
+from eyeagent.core.diagnosis_utils import get_candidate_diseases_from_probs
 
-MCP_SERVER_URL = os.getenv("MCP_SERVER_URL", "http://localhost:5789/mcp/")
+MCP_SERVER_URL = get_mcp_server_url("http://localhost:5789/mcp/")
 SCHEMA_VERSION = "1.0.0"
 
 # Help diagnose which code path is running (local source vs installed package)
@@ -137,11 +137,7 @@ def get_pipeline_capabilities(pipeline: list) -> list:
     for key in pipeline:
         cls = get_agent_class(key)
         if cls:
-            try:
-                caps = get_capabilities(cls)
-            except Exception:
-                caps = {}
-            out.append({"key": key, "capabilities": caps})
+            out.append({"key": key})
     return out
 
 

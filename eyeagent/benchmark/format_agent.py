@@ -74,27 +74,6 @@ class FormatAgent(BaseAgent):
         valid = ", ".join(self.class_names)
         self._emit_debug_inputs(convo_text=convo_text, final_fragment_snippet=ff_snippet, valid_list=valid, tools_summary=tools_text)
 
-        # Dry-run or LLM missing: deterministically return Normal without heuristic extraction
-        if os.getenv("EYEAGENT_DRY_RUN", "0").lower() in ("1", "true", "yes") or self.llm is None:
-            diagnosis = self._clamp_to_valid("Normal")
-            formatted_output = f"The diagnosis of this image is {diagnosis}"
-            reasoning = "Dry-run/LLM-unavailable; returned 'Normal' without heuristic extraction (LLM-only policy)."
-            outputs = {
-                "formatted_diagnosis": formatted_output,
-                "extracted_diagnosis": diagnosis,
-                "confidence": 0.5,
-                "reasoning": reasoning,
-            }
-            self.trace_logger.append_event(self.case_id, {
-                "type": "agent_step",
-                "agent": self.name,
-                "role": self.role,
-                "outputs": outputs,
-                "tool_calls": [],
-                "reasoning": reasoning,
-            })
-            return {"agent": self.name, "role": self.role, "outputs": outputs, "tool_calls": [], "reasoning": reasoning}
-
         prompt = (
             self.system_prompt
             + "\n\nVALID DIAGNOSES: " + valid
@@ -147,7 +126,7 @@ class FormatAgent(BaseAgent):
     def _load_conversation_text_safe(self) -> str:
         """Load conversation.jsonl to a compact transcript string."""
         try:
-            from eyeagent.tracing.trace_logger import TraceLogger  # for type reference only
+            from eyeagent.trace.trace_logger import TraceLogger  # for type reference only
             path = self.trace_logger.get_conversation_path(self.case_id)
             if not path or not os.path.exists(path):
                 return ""
@@ -181,7 +160,7 @@ class FormatAgent(BaseAgent):
           - misc: List[Dict[str, Any]]  # other notable tool outputs
         """
         try:
-            from eyeagent.tracing.trace_logger import TraceLogger  # import here to avoid cycles at import time
+            from eyeagent.trace.trace_logger import TraceLogger  # import here to avoid cycles at import time
             doc: Dict[str, Any] = self.trace_logger.load_trace(self.case_id)  # type: ignore[attr-defined]
         except Exception:
             return "", {}
@@ -489,9 +468,8 @@ class FormatAgent(BaseAgent):
     def _llm_extract_diagnosis(self, final_fragment: Dict[str, Any]) -> str:
         """Use LLM to extract diagnosis from complex output."""
         try:
-            if os.getenv("EYEAGENT_DRY_RUN", "0").lower() in ("1", "true", "yes"):
-                return "Normal"
             if self.llm is None:
+                logger.warning("LLM not available for diagnosis extraction.")
                 return "Normal"
             
             prompt = f"""
@@ -609,15 +587,11 @@ def format_diagnosis_for_evaluation(diagnostic_output: Dict[str, Any],
     Returns:
         Formatted diagnosis string
     """
-    from eyeagent.tracing.trace_logger import TraceLogger
+    from eyeagent.trace.trace_logger import TraceLogger
     
     # Create a temporary format agent (no conversation available here)
     trace_logger = TraceLogger()
     fmt = FormatAgent("", trace_logger, "temp", class_names)
-    # LLM path if available; else Normal
-    if os.getenv("EYEAGENT_DRY_RUN", "0").lower() in ("1", "true", "yes") or fmt.llm is None:
-        diag = fmt._clamp_to_valid("Normal")
-        return f"The diagnosis of this image is {diag}"
     try:
         valid = ", ".join(fmt.class_names)
         ff = json.dumps(diagnostic_output, ensure_ascii=False)

@@ -7,7 +7,7 @@ __all__ = [
     "diagnostic_workflow",
     "agents",
     "tools",
-    "tracing",
+    "trace",
     "schemas",
 ]
 

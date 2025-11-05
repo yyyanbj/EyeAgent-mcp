@@ -3,9 +3,10 @@ from typing import Any, Dict, List, Optional, Callable
 import os
 from loguru import logger
 
-from ..agents.registry import get_agent_class
-from ..metrics.metrics import step_timer
-from ..tracing.trace_logger import TraceLogger
+from eyeagent.agents.registry import get_agent_class
+from eyeagent.metrics.metrics import step_timer
+from eyeagent.trace.trace_logger import TraceLogger
+from eyeagent.core.settings import get_mcp_server_url
 
 
 class InteractionEngine:
@@ -95,10 +96,25 @@ class InteractionEngine:
         return False
 
     async def ainvoke(self, state: Dict[str, Any]) -> Dict[str, Any]:
-        current = self.spec.get("start") or "orchestrator"
+        # Enforce strict cadence: route (orchestrator) -> execute (one agent) -> collect -> route ...
+        # Start node: prefer spec.start; else orchestrator; else first defined node; else None
+        current = None
+        try:
+            start = (self.spec.get("start") or "").strip()
+            if start and start in self.nodes:
+                current = start
+            elif "orchestrator" in self.nodes:
+                current = "orchestrator"
+            elif self.nodes:
+                current = next(iter(self.nodes.keys()))
+            else:
+                current = None
+        except Exception:
+            logger.warning("[engine] failed to determine start node")
+            current = "orchestrator"
         visited = 0
-        pipeline_order: Optional[List[str]] = None
-        pipeline_idx = 0
+        # When an agent (non-orchestrator) has just run, we always return to orchestrator
+        return_to_orchestrator = False
         # ensure messages/trace/case_id exist
         trace = state.get("trace") or TraceLogger()
         state["trace"] = trace
@@ -125,7 +141,7 @@ class InteractionEngine:
                 current = next_id
                 continue
 
-            agent = cls(os.getenv("MCP_SERVER_URL", "http://localhost:8000/mcp/"), state["trace"], state["case_id"])  # type: ignore
+            agent = cls(get_mcp_server_url("http://localhost:8000/mcp/"), state["trace"], state["case_id"])  # type: ignore
             # Build context
             ctx = dict(state)
             ctx["messages"] = state.get("messages", [])
@@ -140,7 +156,7 @@ class InteractionEngine:
             state.setdefault("workflow", []).append(res)
             # Append messages similar to workflow helper
             try:
-                from ..diagnostic_workflow import _append_messages_from_result  # type: ignore
+                from eyeagent.diagnostic_workflow import _append_messages_from_result  # type: ignore
                 _append_messages_from_result(state, res)
             except Exception:
                 pass
@@ -156,27 +172,34 @@ class InteractionEngine:
                 except Exception:
                     continue
 
-            # After orchestrator, allow orchestrator-decided pipeline to take control
-            if (current == "orchestrator") and isinstance(state.get("pipeline"), list) and state["pipeline"]:
-                pipeline_order = [str(x) for x in state["pipeline"]]
-                pipeline_idx = 0
-                logger.info(f"[engine] routing via orchestrator pipeline: {pipeline_order}")
-                # Advance to first node in pipeline
-                current = pipeline_order[pipeline_idx]
-                pipeline_idx += 1
+            # Strict cadence control:
+            if current == "orchestrator":
+                # Prefer explicit next_agent from orchestrator outputs
+                next_agent = None
+                try:
+                    next_agent = (outputs or {}).get("next_agent")
+                except Exception:
+                    next_agent = None
+                if isinstance(next_agent, str) and next_agent:
+                    # If orchestrator routes to report, we will run it once and then stop
+                    current = next_agent
+                    return_to_orchestrator = True if next_agent != "report" else False
+                    # Map planned_pipeline to state for UI/debug but do not follow it automatically
+                    state["pipeline"] = (outputs or {}).get("planned_pipeline") or state.get("pipeline")
+                    continue
+                # Fallback: use declarative edges if no next_agent provided
+                current = self._next_from_edges("orchestrator", state)
+                return_to_orchestrator = False
                 continue
-
-            # If already following a pipeline, continue sequentially
-            if pipeline_order is not None:
-                if pipeline_idx < len(pipeline_order):
-                    current = pipeline_order[pipeline_idx]
-                    pipeline_idx += 1
-                else:
+            else:
+                # After any agent finishes, either stop (if it was report) or go back to orchestrator
+                if current == "report":
                     current = None
+                    continue
+                # Return to orchestrator for re-routing
+                current = "orchestrator" if "orchestrator" in self.nodes else (self.spec.get("start") or None)
+                return_to_orchestrator = False
                 continue
-
-            # Otherwise, follow declarative edges
-            current = self._next_from_edges(current, state)
 
         return state
 

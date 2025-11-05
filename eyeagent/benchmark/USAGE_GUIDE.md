@@ -19,7 +19,6 @@ eyeagent/benchmark/
     ├── basic_benchmark.yaml
     ├── dr_screening_benchmark.yaml
     ├── multi_disease_benchmark.yaml
-    ├── dry_run_benchmark.yaml
     └── run_example.py
 ```
 
@@ -149,7 +148,6 @@ dataset:
 model:
   workflow_backend: "langgraph"
   mcp_server_url: "http://localhost:8000/mcp/"
-  dry_run: false
   enable_format_agent: true
 
 metrics:
@@ -206,15 +204,8 @@ python eyeagent/benchmark/cli.py run --dataset ./data/test.csv --classes Normal 
 
 ## 🔧 高级功能
 
-### 1. Dry-run 模式
 
-用于测试管道而不实际运行模型推理：
-
-```python
-config.model.dry_run = True
-```
-
-### 2. 样本限制
+### 1. 样本限制
 
 限制处理的样本数量以加快测试：
 
@@ -222,7 +213,7 @@ config.model.dry_run = True
 config.dataset.max_samples = 50
 ```
 
-### 3. 自定义类别名称
+### 2. 自定义类别名称
 
 指定有效的诊断类别：
 

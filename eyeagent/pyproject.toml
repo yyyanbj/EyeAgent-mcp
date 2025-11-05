@@ -43,8 +43,8 @@ build-backend = "setuptools.build_meta"
 packages = ["eyeagent"]
 
 [project.scripts]
-eyeagent-diagnose = "eyeagent.run_diagnosis:main"
 eyeagent-ui = "eyeagent.ui.app:main"
+eyeagent = "eyeagent.cli:main"
 
 [tool.pytest.ini_options]
 testpaths = [

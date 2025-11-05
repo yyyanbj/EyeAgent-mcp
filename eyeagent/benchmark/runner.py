@@ -19,7 +19,7 @@ from .dataset_loader import DatasetLoader
 from .metrics import MetricsCalculator, extract_predictions_from_results
 from .format_agent import FormatAgent
 from eyeagent.diagnostic_workflow import run_diagnosis_async
-from eyeagent.tracing.trace_logger import TraceLogger
+from eyeagent.trace.trace_logger import TraceLogger
 
 import logging
 
@@ -48,10 +48,7 @@ class BenchmarkRunner:
 
     def _configure_environment(self) -> None:
         """Configure environment variables for diagnostic execution."""
-        if self.config.model.dry_run:
-            os.environ["EYEAGENT_DRY_RUN"] = "1"
-        else:
-            os.environ.pop("EYEAGENT_DRY_RUN", None)
+        # Dry-run mode removed; always use real execution per configuration
 
         # Select workflow backend (langgraph | profile | interaction | single)
         if self.config.model.workflow_backend:
@@ -449,7 +446,6 @@ class BenchmarkRunner:
             "model_info": {
                 "workflow_backend": self.config.model.workflow_backend,
                 "mcp_server_url": self.config.model.mcp_server_url,
-                "dry_run": self.config.model.dry_run,
                 "format_agent_enabled": self.config.model.enable_format_agent,
             },
             "performance_summary": {
@@ -574,7 +570,6 @@ async def rerun_failed_cases(
     *,
     cases_dir: Optional[str] = None,
     keep_history: bool = False,
-    dry_run: bool = False,
     verbose: bool = False,
 ) -> Dict[str, Any]:
     """Rerun failed benchmark cases without touching successful ones."""
@@ -598,7 +593,10 @@ async def rerun_failed_cases(
     failed_indices_all = sorted(
         idx for idx, payload in stored_results.items() if payload.get("status") != "success"
     )
-    rerun_targets = [] if dry_run else list(failed_indices_all)
+
+    rerun_targets = [
+        idx for idx in failed_indices_all if 0 <= idx < dataset_size
+    ]
 
     for idx in rerun_targets:
         if idx >= dataset_size:

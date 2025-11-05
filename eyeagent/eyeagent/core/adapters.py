@@ -4,11 +4,12 @@ import os
 from typing import Any, Dict, List, Optional, Tuple
 from uuid import uuid4
 
-from ..tracing.trace_logger import TraceLogger
-from ..agents.orchestrator_agent import OrchestratorAgent
-from ..agents.image_analysis_agent import ImageAnalysisAgent
-from ..agents.specialist_agent import SpecialistAgent
-from ..agents.followup_agent import FollowUpAgent
+from eyeagent.trace.trace_logger import TraceLogger
+from eyeagent.agents.orchestrator_agent import OrchestratorAgent
+from eyeagent.agents.image_analysis_agent import ImageAnalysisAgent
+from eyeagent.agents.specialist_agent import SpecialistAgent
+from eyeagent.agents.followup_agent import FollowUpAgent
+from eyeagent.core.settings import get_mcp_server_url
 
 
 def _ensure_runtime(state: Dict[str, Any]):
@@ -19,7 +20,7 @@ def _ensure_runtime(state: Dict[str, Any]):
     if "case_id" not in rt:
         rt["case_id"] = f"case-{uuid4().hex[:8]}"
     if "mcp_url" not in rt:
-        rt["mcp_url"] = os.getenv("MCP_SERVER_URL", "http://localhost:8000/mcp/")
+        rt["mcp_url"] = get_mcp_server_url()
     return rt
 
 

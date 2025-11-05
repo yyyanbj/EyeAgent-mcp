@@ -395,14 +395,13 @@ def _deep_merge(a: Dict[str, Any], b: Dict[str, Any]) -> Dict[str, Any]:
 def _load_tools_config() -> Dict[str, Any]:
     """Load external tools config from YAML/JSON.
 
-    Search order:
-    1) EYEAGENT_TOOLS_FILE
-    2) repo_root/config/tools.yml
-    3) repo_root/config/tools.json
+    Search order (no env vars):
+    - eyeagent/config/tools.(yml|yaml|json)
+    - config/tools.(yml|yaml|json)
     """
     # Determine repo root similar to other configs
     try:
-        from ..tracing.trace_logger import TraceLogger  # type: ignore
+        from eyeagent.trace.trace_logger import TraceLogger  # type: ignore
         t = TraceLogger()
         repo_root = os.path.abspath(os.path.join(t.base_dir, os.pardir))
     except Exception:
@@ -413,9 +412,6 @@ def _load_tools_config() -> Dict[str, Any]:
     legacy_cfg = os.path.join(repo_root, "config")
 
     candidates: List[str] = []
-    env_path = os.getenv("EYEAGENT_TOOLS_FILE")
-    if env_path:
-        candidates.append(env_path)
     for d in (eye_cfg, legacy_cfg):
         candidates.append(os.path.join(d, "tools.yml"))
         candidates.append(os.path.join(d, "tools.yaml"))

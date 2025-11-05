@@ -2,5 +2,10 @@
     "python.analysis.extraPaths": [
         "/home/bingjie/workspace/EyeAgent-mcp/eyeagent",
         "/home/bingjie/workspace/EyeAgent-mcp/eyetools"
-    ]
+    ],
+    "python.testing.pytestArgs": [
+        "eyeagent"
+    ],
+    "python.testing.unittestEnabled": false,
+    "python.testing.pytestEnabled": true
 }

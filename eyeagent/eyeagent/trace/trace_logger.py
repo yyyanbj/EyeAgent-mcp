@@ -5,6 +5,7 @@ import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 from threading import RLock
+from eyeagent.core.settings import get_cases_dir
 
 def ISO() -> str:
     return datetime.datetime.now(datetime.timezone.utc).isoformat()
@@ -39,40 +40,10 @@ class TraceLogger:
            otherwise the outermost directory with a pyproject.toml)
         5) ~/.local/share/eyeagent/cases
         """
-        def _find_repo_root(start: Path) -> Optional[Path]:
-            """Return the OUTERMOST repo root.
-
-            Preference order:
-            - outermost directory containing .git
-            - else outermost directory containing pyproject.toml
-            - else None
-            """
-            cur = start.resolve()
-            parents = [cur] + list(cur.parents)
-            git_candidates = [p for p in parents if (p / ".git").exists()]
-            if git_candidates:
-                return git_candidates[-1]  # outermost .git
-            py_candidates = [p for p in parents if (p / "pyproject.toml").exists()]
-            if py_candidates:
-                return py_candidates[-1]  # outermost pyproject
-            return None
-
         if base_dir:
             resolved = Path(base_dir)
         else:
-            env_cases = os.getenv("EYEAGENT_CASES_DIR")
-            env_data = os.getenv("EYEAGENT_DATA_DIR")
-            if env_cases:
-                resolved = Path(env_cases)
-            elif env_data:
-                resolved = Path(env_data) / "cases"
-            else:
-                repo_root = _find_repo_root(Path(__file__))
-                repo = repo_root.resolve() if repo_root else None
-                if repo:
-                    resolved = repo / "cases"
-                else:
-                    resolved = Path.home() / ".local" / "share" / "eyeagent" / "cases"
+            resolved = Path(get_cases_dir())
 
         self.base_dir = str(resolved.absolute())
         os.makedirs(self.base_dir, exist_ok=True)

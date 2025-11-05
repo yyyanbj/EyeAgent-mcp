@@ -1,0 +1,135 @@
+# EyeAgent imaging-focused multi-agent configuration
+# Usage (no shell env needed):
+# - Place this file at `eyeagent/config/eyeagent.yml` or pass via CLI: `--config /path/to/eyeagent.imaging.yml`
+# - To run the UI with this profile backend:
+#     uv run eyeagent-ui --backend profile
+# - To run headless CLI, use: `uv run eyeagent-cli --backend profile`
+
+llm:
+  default:
+    base_url: "https://api.deepseek.com/v1"
+    model: "deepseek-chat"
+    temperature: 1.0
+    max_tokens: 64000
+  agents:
+    OrchestratorAgent:
+      temperature: 1.0
+    PreliminaryAgent:
+      temperature: 1.0
+    ImageAnalysisAgent:
+      temperature: 1.0
+    SpecialistAgent:
+      temperature: 1.0
+    DecisionAgent:
+      temperature: 1.0
+    FollowUpAgent:
+      temperature: 1.0
+    KnowledgeAgent:
+      temperature: 1.0
+    ReportAgent:
+      temperature: 1.0
+    MultimodalAgent:
+      temperature: 1.0
+
+workflow:
+  backend: profile
+  specialist:
+    candidate_threshold: 0.3
+    candidate_top_k: 5
+
+# Enable only imaging pipeline agents (no symptom triage)
+agents:
+  orchestrator:
+    class: eyeagent.agents.orchestrator_agent.OrchestratorAgent
+    enabled: true
+  preliminary:
+    class: eyeagent.agents.preliminary_agent.PreliminaryAgent
+    enabled: true
+  image_analysis:
+    class: eyeagent.agents.image_analysis_agent.ImageAnalysisAgent
+    enabled: true
+  specialist:
+    class: eyeagent.agents.specialist_agent.SpecialistAgent
+    enabled: true
+  decision:
+    class: eyeagent.agents.decision_agent.DecisionAgent
+    enabled: true
+  knowledge:
+    class: eyeagent.agents.knowledge_agent.KnowledgeAgent
+    enabled: true
+  follow_up:
+    class: eyeagent.agents.followup_agent.FollowUpAgent
+    enabled: true
+  report:
+    class: eyeagent.agents.report_agent.ReportAgent
+    enabled: true
+  # symptom_triage intentionally disabled here
+  symptom_triage:
+    class: eyeagent.agents.symptom_triage_agent.SymptomTriageAgent
+    enabled: false
+  multimodal:
+    class: eyeagent.agents.multimodal_agent.MultimodalAgent
+    enabled: true
+  unified:
+    class: eyeagent.agents.unified_agent.UnifiedAgent
+    enabled: false
+
+prompts:
+  system_prompts:
+    OrchestratorAgent: |
+      ROLE: Orchestrator/router. You never call tools.
+      GOAL: Decide the next agent to run based on current state and preliminary results, and provide a planned pipeline.
+      ORDER: preliminary (if enabled) → image_analysis → specialist → decision → follow_up → report.
+      CONSTRAINTS: In imaging-only profile, do not prompt for symptoms and do not schedule 'symptom_triage'.
+    PreliminaryAgent: |
+      You are the preliminary agent. Infer modality and laterality when images exist; otherwise keep it minimal.
+    ImageAnalysisAgent: |
+      You are the image analysis agent. Run quality checks when applicable and perform modality-appropriate lesion segmentation; for CFP, add multi-disease screening.
+    SpecialistAgent: |
+      You are the specialist agent. Apply disease-specific grading models and produce grades and a brief impression.
+    DecisionAgent: |
+      You are the decision agent. Integrate upstream outputs to refine diagnoses before follow-up/report.
+    FollowUpAgent: |
+      You are the follow-up agent. Suggest follow-up intervals/referrals using disease grades and age; include a concise rationale.
+    KnowledgeAgent: |
+      You are the knowledge agent. Query internal RAG and optionally web search to summarize evidence succinctly when needed.
+    ReportAgent: |
+      You are the report agent. Produce a final clinician-facing summary.
+    MultimodalAgent: |
+      You are the multimodal agent. Handle cross-modality reasoning or conversions when invoked.
+
+pipelines:
+  profiles:
+    imaging:
+      steps:
+        - name: orchestrator
+        - name: image_analysis
+        - name: specialist
+        - name: knowledge
+        - name: follow_up
+        - name: report
+    default:
+      steps:
+        - name: orchestrator
+        - name: image_analysis
+        - name: specialist
+        - name: knowledge
+        - name: follow_up
+        - name: report
+
+# Optional: tools filtering per agent (regex)
+tools_filter:
+  PreliminaryAgent:
+    include: ["classification:(modality|laterality|multidis)"]
+  ImageAnalysisAgent:
+    include: ["classification:cfp_quality", "segmentation:cfp_.*", "segmentation:oct_.*", "segmentation:ffa_.*", "rag:query", "web_search:.*"]
+  SpecialistAgent:
+    include: ["disease_specific_cls:.*", "rag:query", "web_search:.*"]
+  FollowUpAgent:
+    include: ["classification:cfp_age", "rag:query", "web_search:.*"]
+  KnowledgeAgent:
+    include: ["rag:query", "web_search:.*"]
+  DecisionAgent:
+    include: ["rag:query", "web_search:.*"]
+  MultimodalAgent:
+    include: ["multimodal:fundus2oct", "multimodal:fundus2eyeglobe"]

@@ -9,12 +9,13 @@ from typing import Any, Dict, List, Optional
 import os
 import asyncio
 
-from ..tracing.trace_logger import TraceLogger
-from ..agents.registry import register_builtins, get_agent_class
-from ..metrics.metrics import step_timer
+from eyeagent.trace.trace_logger import TraceLogger
+from eyeagent.core.settings import get_mcp_server_url
+from eyeagent.agents.registry import register_builtins, get_agent_class
+from eyeagent.metrics.metrics import step_timer
 from loguru import logger
 
-MCP_SERVER_URL = os.getenv("MCP_SERVER_URL", "http://localhost:8000/mcp/")
+MCP_SERVER_URL = get_mcp_server_url("http://localhost:8000/mcp/")
 SCHEMA_VERSION = "1.0.0"
 
 

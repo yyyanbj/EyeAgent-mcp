@@ -1,0 +1,23 @@
+# Minimal example config for EyeAgent prototype
+runtime:
+  # Optional: override cases directory (where traces go)
+  # cases_dir: ./cases
+
+patient:
+  name: "John Doe"
+  age: 42
+
+# top-level input to seed the pipeline
+input: "Patient reports intermittent eye irritation."
+
+# Orchestrator pipeline
+orchestrator:
+  pipeline:
+    - agent: knowledge
+      config:
+        prompts:
+          # You can set system prompt inline or with a *_path that points to a file
+          system: "Provide a brief, high-level summary."
+          # system_path: ./docs/prompts/system.txt
+    - agent: report
+      config: {}
